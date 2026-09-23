@@ -1,0 +1,48 @@
+# Docker 构建上下文忽略规则（上下文 = 仓库根目录）
+#
+# 目的有二：一是别把 .env 和本地数据库打进镜像层（镜像可被任何人拉取），
+# 二是别让 node_modules / .venv 撑爆构建上下文（几十万文件，构建会慢到不可用）。
+
+# ---- 密钥与本地状态（最关键，任何情况下不得进镜像）----
+.env
+.env.*
+!.env.example
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# ---- 开发环境与缓存 ----
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+_dist_test/
+release/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ---- 前端：镜像里不需要源码与依赖；dist 由 nginx 容器 bind mount ----
+node_modules/
+admin-web/node_modules/
+admin-web/dist/
+admin-web/vite_*.log
+
+# ---- 文档与截图：与运行无关，且体量大 ----
+docs/
+
+# ---- 版本控制与工作区元数据 ----
+.git/
+.gitignore
+.gitattributes
+.workbuddy/
+
+# ---- 开发期临时验证脚手架 ----
+_*.py
+_*.txt
+*.log

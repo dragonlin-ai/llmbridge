@@ -1,0 +1,63 @@
+# LLM 路由中转系统 · systemd 单元（Linux 裸机部署）
+#
+# 安装：
+#   sudo cp deploy/linux/llmbridge.service /etc/systemd/system/
+#   sudo useradd --system --home /opt/llmbridge --shell /usr/sbin/nologin llmbridge
+#   sudo mkdir -p /opt/llmbridge && sudo chown -R llmbridge:llmbridge /opt/llmbridge
+#   # 把仓库内容放进去，建好 .venv，装好依赖，配好 .env
+#   sudo systemctl daemon-reload && sudo systemctl enable --now llmbridge
+#
+# 查看：journalctl -u llmbridge -f
+
+[Unit]
+Description=LLM 路由中转系统（llmbridge 网关 + 控制台）
+Documentation=file:///opt/llmbridge/docs/README.md
+After=network-online.target
+Wants=network-online.target
+# 若 PostgreSQL/Redis 装在同一台机器上，取消下面两行注释并同步调整顺序。
+# After=postgresql.service redis-server.service
+# Wants=postgresql.service redis-server.service
+
+[Service]
+Type=simple
+User=llmbridge
+Group=llmbridge
+WorkingDirectory=/opt/llmbridge
+
+# 刻意**不用** EnvironmentFile：
+# systemd 的 dotenv 方言与 pydantic-settings 并不一致（引号处理、行内 # 截断等），
+# 同一份 .env 被两套解析器读会出现「配置值≠生效值」。让应用自己读 .env 是唯一真源。
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+# UTC 便于与上游厂商账单对齐；控制台按浏览器本地时区展示。
+Environment=TZ=UTC
+
+# 用 llmbridge-serve 而不是裸 uvicorn：
+# 它内置了 psycopg3 需要的事件循环工厂，省掉 --loop 参数写错/写漏导致的
+# 「服务起来了但一访问数据库就 500」。Linux 上该工厂自动退回默认实现。
+ExecStart=/opt/llmbridge/.venv/bin/llmbridge-serve --host 127.0.0.1 --port 8000 --workers 4
+
+# uvicorn 支持 HUP 优雅重启（不断开在途请求）
+ExecReload=/bin/kill -HUP $MAINPID
+KillSignal=SIGINT
+TimeoutStopSec=30
+Restart=always
+RestartSec=3
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=llmbridge
+
+# ---- 安全加固（无需 root 权限即可全部开启）----
+NoNewPrivileges=true
+PrivateTmp=true
+# /usr /boot /etc 只读；应用只需在 WorkingDirectory 下写运行时产物
+ProtectSystem=full
+ProtectHome=true
+RestrictSUIDSGID=true
+LockPersonality=true
+# 需要连内网网关时（ALLOW_LOCAL_BASE_URL=true）请保持注释。
+# RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

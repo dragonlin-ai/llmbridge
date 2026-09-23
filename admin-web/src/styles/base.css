@@ -1,0 +1,74 @@
+/* ============================================================================
+   全局基础样式
+   ============================================================================ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--text-1);
+  background-color: var(--bg-app);
+  transition: background-color 0.3s var(--ease), color 0.3s var(--ease);
+}
+
+#app {
+  min-height: 100vh;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  margin: 0;
+  font-weight: 600;
+  color: var(--text-1);
+}
+
+p {
+  margin: 0;
+}
+
+a {
+  color: var(--p-600);
+  text-decoration: none;
+  transition: color 0.2s var(--ease);
+}
+a:hover {
+  color: var(--p-500);
+}
+html.dark a {
+  color: var(--p-400);
+}
+html.dark a:hover {
+  color: var(--p-300);
+}
+
+code,
+pre,
+kbd {
+  font-family: var(--font-mono);
+}
+
+/* Element Plus 在 body 上渲染的浮层（message / notification / dialog），
+   需要跟随主题令牌 —— 变量已在 element.css 中接管。 */
+.el-overlay {
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+}

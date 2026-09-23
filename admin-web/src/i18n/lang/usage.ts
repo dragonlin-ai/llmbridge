@@ -1,0 +1,86 @@
+export default {
+  zh: {
+    'usage.title': '用量与成本',
+    'usage.subtitle': '按模型、路由层与日期聚合调用量、Token 与成本，统计口径与概览页一致',
+
+    'usage.d1': '近 1 天',
+    'usage.d7': '近 7 天',
+    'usage.d30': '近 30 天',
+    'usage.d90': '近 90 天',
+
+    'usage.scopeClean': '已排除试跑台诊断流量',
+    'usage.scopeDirty': '口径未排除诊断流量（与概览页不一致）',
+    'usage.windowStart': '窗口起点',
+    'usage.qualityNote':
+      '共 {n} 次调用，其中 {tok} 次带 Token 数据、{cost} 次带成本数据 —— 未落用量的多为 L1 规则命中、L3 兜底失败或被降级链提前拦截的请求，其 Token/成本记为 0 并不代表真实零消耗。',
+
+    'usage.card.calls': '调用量',
+    'usage.card.cost': '总成本',
+    'usage.card.tokens': '总 Token',
+    'usage.card.success': '成功率',
+    'usage.card.fallback': '兜底率',
+    'usage.card.latency': '平均延迟',
+    'usage.card.models': '计费模型数',
+
+    'usage.byModel': '按模型聚合',
+    'usage.byModelCount': '共 {n} 组',
+    'usage.noModel': '未落模型',
+    'usage.col.model': '模型',
+    'usage.col.calls': '调用',
+    'usage.col.tokens': 'Token（输入 / 输出）',
+    'usage.col.cost': '成本',
+    'usage.col.avgCost': '单次成本',
+    'usage.col.success': '成功率',
+    'usage.col.latency': '平均延迟',
+    'usage.col.layer': '路由层',
+    'usage.col.fallback': '兜底次数',
+
+    'usage.byLayer': '按路由层',
+    'usage.byStatus': '状态分布',
+    'usage.trend': '按日趋势',
+    'usage.trendHint': '柱高 = 当日调用量，悬停可看成本',
+    'usage.empty': '该窗口内无调用记录',
+  },
+  en: {
+    'usage.title': 'Usage & Cost',
+    'usage.subtitle': 'Call volume, tokens and cost by model, routing layer and day — same scope as the overview page',
+
+    'usage.d1': 'Last 1 day',
+    'usage.d7': 'Last 7 days',
+    'usage.d30': 'Last 30 days',
+    'usage.d90': 'Last 90 days',
+
+    'usage.scopeClean': 'Playground diagnostics excluded',
+    'usage.scopeDirty': 'Diagnostics NOT excluded (differs from overview)',
+    'usage.windowStart': 'Window start',
+    'usage.qualityNote':
+      '{n} calls in total: {tok} carry token data and {cost} carry cost data. Requests without usage are mostly L1 rule hits, L3 fallbacks or ones short-circuited earlier — a recorded 0 does not mean zero real consumption.',
+
+    'usage.card.calls': 'Calls',
+    'usage.card.cost': 'Total cost',
+    'usage.card.tokens': 'Total tokens',
+    'usage.card.success': 'Success rate',
+    'usage.card.fallback': 'Fallback rate',
+    'usage.card.latency': 'Avg latency',
+    'usage.card.models': 'Billed models',
+
+    'usage.byModel': 'By model',
+    'usage.byModelCount': '{n} groups',
+    'usage.noModel': 'no model recorded',
+    'usage.col.model': 'Model',
+    'usage.col.calls': 'Calls',
+    'usage.col.tokens': 'Tokens (in / out)',
+    'usage.col.cost': 'Cost',
+    'usage.col.avgCost': 'Cost / call',
+    'usage.col.success': 'Success',
+    'usage.col.latency': 'Avg latency',
+    'usage.col.layer': 'Layer',
+    'usage.col.fallback': 'Fallbacks',
+
+    'usage.byLayer': 'By routing layer',
+    'usage.byStatus': 'Status distribution',
+    'usage.trend': 'Daily trend',
+    'usage.trendHint': 'Bar height = calls that day; hover for cost',
+    'usage.empty': 'No calls in this window',
+  },
+}

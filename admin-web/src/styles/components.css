@@ -1,0 +1,405 @@
+/* ============================================================================
+   通用组件类 —— 对齐 sub2api 的 @layer components（frontend/src/style.css）
+   统一使用 app- 前缀，避免与 Element Plus 及页面 scoped 样式冲突。
+   ============================================================================ */
+
+/* ── 页面头部 ───────────────────────────────────────────────────────── */
+.app-page-header {
+  margin-bottom: 24px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.app-page-title {
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1.3;
+  color: var(--text-1);
+  margin: 0;
+}
+.app-page-desc {
+  margin: 4px 0 0;
+  font-size: 14px;
+  color: var(--text-3);
+}
+.app-page-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* ── 卡片 ───────────────────────────────────────────────────────────── */
+.app-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-base);
+  border-radius: var(--r-lg);
+  box-shadow: var(--sh-card);
+  /* 裁剪内部表格 / 图片的直角，保持圆角一致 */
+  overflow: hidden;
+  transition: box-shadow 0.3s var(--ease), transform 0.3s var(--ease),
+    border-color 0.3s var(--ease);
+}
+.app-card-hover:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--sh-card-hover);
+  border-color: var(--border-strong);
+}
+.app-card-header {
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--border-base);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-weight: 600;
+  color: var(--text-1);
+}
+.app-card-body {
+  padding: 24px;
+}
+.app-card-footer {
+  padding: 16px 24px;
+  border-top: 1px solid var(--border-base);
+}
+.app-card-glass {
+  background: var(--bg-glass);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+}
+
+/* ── 统计卡片 ───────────────────────────────────────────────────────── */
+.app-stat-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 20px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-base);
+  border-radius: var(--r-lg);
+  box-shadow: var(--sh-card);
+  transition: box-shadow 0.3s var(--ease), transform 0.3s var(--ease),
+    border-color 0.3s var(--ease);
+}
+.app-stat-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--sh-card-hover);
+  border-color: var(--border-strong);
+}
+.app-stat-icon {
+  flex: none;
+  width: 48px;
+  height: 48px;
+  border-radius: var(--r-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+}
+.app-stat-icon.is-primary {
+  background: var(--p-100);
+  color: var(--p-600);
+}
+html.dark .app-stat-icon.is-primary {
+  background: rgba(19, 78, 74, 0.4);
+  color: var(--p-400);
+}
+.app-stat-icon.is-success {
+  background: var(--c-success-soft);
+  color: var(--c-success-text);
+}
+.app-stat-icon.is-warning {
+  background: var(--c-warning-soft);
+  color: var(--c-warning-text);
+}
+.app-stat-icon.is-danger {
+  background: var(--c-danger-soft);
+  color: var(--c-danger-text);
+}
+.app-stat-icon.is-purple {
+  background: var(--c-purple-soft);
+  color: var(--c-purple-text);
+}
+.app-stat-meta {
+  min-width: 0;
+  flex: 1;
+}
+.app-stat-value {
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1.2;
+  color: var(--text-1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.app-stat-label {
+  margin-top: 2px;
+  font-size: 13px;
+  color: var(--text-3);
+}
+.app-stat-trend {
+  margin-top: 4px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+/* ── 徽章 ───────────────────────────────────────────────────────────── */
+.app-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 10px;
+  border-radius: var(--r-full);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.6;
+  white-space: nowrap;
+}
+.app-badge.is-primary {
+  background: var(--p-100);
+  color: var(--p-700);
+}
+.app-badge.is-success {
+  background: var(--c-success-soft);
+  color: var(--c-success-text);
+}
+.app-badge.is-warning {
+  background: var(--c-warning-soft);
+  color: var(--c-warning-text);
+}
+.app-badge.is-danger {
+  background: var(--c-danger-soft);
+  color: var(--c-danger-text);
+}
+.app-badge.is-purple {
+  background: var(--c-purple-soft);
+  color: var(--c-purple-text);
+}
+.app-badge.is-gray {
+  background: var(--bg-subtle);
+  color: var(--text-2);
+}
+.app-badge.is-info {
+  background: var(--c-info-soft);
+  color: var(--c-info-text);
+}
+
+/* ── 工具条 ─────────────────────────────────────────────────────────── */
+.app-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border-base);
+}
+.app-toolbar-spacer {
+  flex: 1;
+}
+
+/* ── 代码 ───────────────────────────────────────────────────────────── */
+.app-code {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  background: var(--bg-subtle);
+  border-radius: var(--r-xs);
+  padding: 2px 6px;
+  color: var(--p-600);
+}
+html.dark .app-code {
+  color: var(--p-400);
+}
+.app-code-block {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  background: var(--n-900);
+  color: var(--n-100);
+  border-radius: var(--r-md);
+  padding: 16px;
+  overflow-x: auto;
+  margin: 0;
+  line-height: 1.6;
+}
+
+/* ── 空状态 ─────────────────────────────────────────────────────────── */
+.app-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 16px;
+  text-align: center;
+  color: var(--text-3);
+}
+.app-empty-title {
+  margin: 0 0 4px;
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--text-1);
+}
+.app-empty-desc {
+  max-width: 360px;
+  font-size: 13px;
+  color: var(--text-3);
+}
+
+/* ── 分隔线 ─────────────────────────────────────────────────────────── */
+.app-divider {
+  height: 1px;
+  background: var(--border-base);
+  margin: 16px 0;
+}
+
+/* ── 网格 ───────────────────────────────────────────────────────────── */
+.app-grid {
+  display: grid;
+  gap: 16px;
+}
+.app-grid-2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.app-grid-3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.app-grid-4 {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+.app-grid-5 {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+@media (max-width: 1280px) {
+  .app-grid-5,
+  .app-grid-4 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .app-grid-3 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 768px) {
+  .app-grid-2,
+  .app-grid-3,
+  .app-grid-4,
+  .app-grid-5 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* ── mesh 渐变背景（对齐 sub2api `bg-mesh-gradient`，收敛为柔和光斑） ── */
+.app-mesh-bg {
+  background-image: radial-gradient(1100px 420px at 12% -12%, rgba(20, 184, 166, 0.1), transparent 70%),
+    radial-gradient(900px 380px at 88% -8%, rgba(6, 182, 212, 0.07), transparent 70%);
+  background-repeat: no-repeat;
+}
+html.dark .app-mesh-bg {
+  background-image: radial-gradient(1100px 420px at 12% -12%, rgba(20, 184, 166, 0.16), transparent 70%),
+    radial-gradient(900px 380px at 88% -8%, rgba(6, 182, 212, 0.11), transparent 70%);
+}
+
+/* ── 文字渐变 ───────────────────────────────────────────────────────── */
+.app-text-gradient {
+  background: linear-gradient(
+    135deg,
+    var(--p-500) 0%,
+    var(--p-600) 60%,
+    var(--n-500) 100%
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* ── 进度条 ─────────────────────────────────────────────────────────── */
+.app-progress {
+  height: 8px;
+  border-radius: var(--r-full);
+  background: var(--bg-subtle);
+  overflow: hidden;
+}
+.app-progress-bar {
+  height: 100%;
+  border-radius: var(--r-full);
+  background: linear-gradient(90deg, var(--p-500), var(--p-400));
+  transition: width 0.3s var(--ease);
+}
+
+/* ── 自定义滚动条（对齐 sub2api：默认透明，悬浮显现） ───────────────── */
+.app-scroll::-webkit-scrollbar,
+.app-scroll-area ::-webkit-scrollbar {
+  height: 8px;
+  width: 8px;
+}
+.app-scroll::-webkit-scrollbar-track,
+.app-scroll-area ::-webkit-scrollbar-track {
+  background: transparent;
+}
+.app-scroll::-webkit-scrollbar-thumb,
+.app-scroll-area ::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: var(--r-full);
+  transition: background-color 0.2s var(--ease);
+}
+.app-scroll:hover::-webkit-scrollbar-thumb,
+.app-scroll-area *:hover::-webkit-scrollbar-thumb {
+  background: var(--n-300);
+}
+html.dark .app-scroll:hover::-webkit-scrollbar-thumb,
+html.dark .app-scroll-area *:hover::-webkit-scrollbar-thumb {
+  background: var(--n-600);
+}
+
+/* ── 动画 ───────────────────────────────────────────────────────────── */
+@keyframes appFadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes appSlideUp {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes appScaleIn {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+/* ⚠️ 页面根的 fade 动画会让 .app-anim-fade 成为 stacking context（只要
+   animation-name 声明着就一直成立，与 fill-mode 无关——Chrome 实测），
+   页面内 z-index 再高的元素（如 el-overlay z=2004）也会被封在里面，
+   输给 sidebar(z:40)/topbar(z:30) => 弹窗遮罩只盖中间内容区、盖不住侧栏顶栏。
+   因此 admin-web 内所有 el-dialog 必须加 append-to-body（teleport 到 body
+   脱离该 context）。ElMessageBox 默认 appendTo body，不受影响。 */
+.app-anim-fade {
+  animation: appFadeIn 0.3s var(--ease) both;
+}
+.app-anim-up {
+  animation: appSlideUp 0.3s var(--ease) both;
+}
+.app-anim-scale {
+  animation: appScaleIn 0.2s var(--ease) both;
+}
+
+/* ── 选中文本样式（对齐 sub2api ::selection） ─────────────────────────── */
+::selection {
+  background: rgba(20, 184, 166, 0.2);
+}

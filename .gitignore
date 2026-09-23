@@ -1,0 +1,79 @@
+# ============================================================
+# LLM 路由中转系统 · Git 忽略规则
+# 基线要求：ENCRYPTION_MASTER_KEY 与厂商 API Key 严禁入版本库
+# ============================================================
+
+# ---- 环境变量与密钥（最高优先级，任何情况下不得入库）----
+.env
+.env.*
+!.env.example
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+coverage.xml
+.tox/
+
+# ---- 数据库（本地 SQLite 开发库）----
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# ---- 日志 ----
+*.log
+logs/
+
+# ---- 运行时落盘产物 ----
+# 日志队列满时 logbuffer 的丢弃落盘文件，属运行时产物，不入库
+request_log_dropped.json
+
+# 厂商目录预置脚本（scripts/seed_provider_catalog.py）的默认报告落点
+seed_provider_catalog_report.txt
+
+# ---- 构建与打包产物 ----
+build/
+release/
+*.egg-info/
+
+# ---- 开发期临时验证脚手架 ----
+# 联调脚本与其输出统一以 _ 前缀命名，验证后即删；此处兜底防误入库
+/_*.py
+/_*.txt
+/admin-web/_*.py
+/admin-web/_*.txt
+
+# ---- Node / 前端 ----
+node_modules/
+dist/
+dist-ssr/
+.vite/
+*.local
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ---- IDE / 操作系统 ----
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# ---- 导出物 ----
+docs/exports/
+
+# ---- 本地工作区状态 ----
+# 助手/IDE 的工作区元数据与工作日志，属本机状态，不入版本库
+.workbuddy/

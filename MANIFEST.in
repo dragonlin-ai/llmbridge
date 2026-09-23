@@ -1,0 +1,23 @@
+# sdist（源码分发包）内容清单。
+#
+# 为什么需要它：wheel 只含 `app/`（库本体），而完成一次部署还需要
+# `scripts/`（初始化与迁移脚本）和 `deploy/`（编排与反向代理配置）。
+# 不声明的话 sdist 会漏掉它们，拿到源码包的人无法完成部署。
+#
+# 刻意**不**包含：admin-web/（前端在 release bundle 里以构建产物 dist/ 交付）、
+# docs/（含大量截图，会白白撑大包体；文档随仓库与 release bundle 分发）。
+
+include LICENSE
+include README.md
+include .env.example
+include pyproject.toml
+
+recursive-include scripts *.py
+recursive-include deploy *
+
+# 运行时不该出现在任何分发包里的东西
+global-exclude *.py[cod]
+global-exclude __pycache__/*
+global-exclude *.db *.db-wal *.db-shm *.sqlite *.sqlite3
+global-exclude *.log
+global-exclude .env

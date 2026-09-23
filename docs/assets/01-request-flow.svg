@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 390" width="680" height="390" role="img">
+  <title>大模型中转系统整体调用链路</title>
+  <desc>第三方系统发起请求进入中转系统，经接入层校验后由判定层用 Jev 选出目标模型，执行层经 Adapter 调用下游模型，最终把调用结果与判定元信息返回第三方系统。</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="680" height="390" fill="#FFFFFF"/>
+
+  <rect x="40" y="162" width="88" height="56" rx="10" fill="#F1EFE8" stroke="#B4B2A9" stroke-width="0.5"/>
+  <text x="84" y="184" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="500" fill="#444441" font-family="sans-serif">第三方系统</text>
+  <text x="84" y="202" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#5F5E5A" font-family="sans-serif">零改造接入</text>
+
+  <path d="M132 190 H168" fill="none" stroke="#378ADD" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <rect x="172" y="44" width="332" height="292" rx="16" fill="#E6F1FB" stroke="#378ADD" stroke-width="0.5"/>
+  <text x="192" y="68" font-size="12" fill="#185FA5" font-family="sans-serif">中转系统</text>
+
+  <rect x="192" y="80" width="292" height="56" rx="10" fill="#B5D4F4" stroke="#185FA5" stroke-width="0.5"/>
+  <text x="338" y="100" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="500" fill="#0C447C" font-family="sans-serif">接入层</text>
+  <text x="338" y="118" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#185FA5" font-family="sans-serif">鉴权 · 限流 · 参数校验</text>
+
+  <rect x="192" y="152" width="292" height="88" rx="10" fill="#CECBF6" stroke="#534AB7" stroke-width="0.5"/>
+  <text x="338" y="170" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="500" fill="#3C3489" font-family="sans-serif">判定层 · 用 Jev 选出目标模型</text>
+  <text x="338" y="196" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#534AB7" font-family="sans-serif">① Jev 判定 → 任务类别 task_type</text>
+  <text x="338" y="220" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#534AB7" font-family="sans-serif">② 代码映射 → 具体模型 model_id</text>
+
+  <rect x="192" y="256" width="292" height="56" rx="10" fill="#B5D4F4" stroke="#185FA5" stroke-width="0.5"/>
+  <text x="338" y="276" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="500" fill="#0C447C" font-family="sans-serif">执行层</text>
+  <text x="338" y="294" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#185FA5" font-family="sans-serif">Adapter 调用选中模型 · 失败自动降级</text>
+
+  <path d="M508 190 H544" fill="none" stroke="#378ADD" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <text x="594" y="94" text-anchor="middle" font-size="12" fill="#185FA5" font-family="sans-serif">下游模型池</text>
+  <rect x="548" y="110" width="92" height="44" rx="8" fill="#B5D4F4" stroke="#185FA5" stroke-width="0.5"/>
+  <text x="594" y="132" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#0C447C" font-family="sans-serif">GPT / Claude</text>
+  <rect x="548" y="168" width="92" height="44" rx="8" fill="#B5D4F4" stroke="#185FA5" stroke-width="0.5"/>
+  <text x="594" y="190" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#0C447C" font-family="sans-serif">DeepSeek</text>
+  <rect x="548" y="226" width="92" height="44" rx="8" fill="#B5D4F4" stroke="#185FA5" stroke-width="0.5"/>
+  <text x="594" y="248" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#0C447C" font-family="sans-serif">本地 vLLM</text>
+
+  <path d="M594 270 V352 H84 V218" fill="none" stroke="#639922" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="339" y="370" text-anchor="middle" font-size="12" fill="#3B6D11" font-family="sans-serif">调用结果 + 判定元信息（选了哪个模型、依据）</text>
+</svg>

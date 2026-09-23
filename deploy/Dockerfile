@@ -1,0 +1,48 @@
+# syntax=docker/dockerfile:1
+#
+# LLM 路由中转系统 · 后端镜像
+#
+# 构建（**上下文必须是仓库根目录**，因为要拷 app/ 与 scripts/）：
+#   docker build -f deploy/Dockerfile -t llmbridge-api:1.0.0 .
+#
+# 用 `pip install -e .` 而不是 `pip install .`：
+#   非可编辑安装会把 app/ 复制进 site-packages，于是 `llmbridge-catalog` 按
+#   `app/cli.py` 的相对位置找不到 `scripts/seed_provider_catalog.py`。可编辑安装
+#   让 app/ 原地留在 /app，厂商目录预置才能开箱即用。
+
+FROM python:3.13-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    TZ=Asia/Shanghai \
+    LLMBRIDGE_REPO_ROOT=/app
+
+WORKDIR /app
+
+# 依赖清单与源码分开拷贝：改业务代码不会让「装依赖」这一层缓存失效。
+COPY pyproject.toml README.md MANIFEST.in ./
+COPY app ./app
+COPY scripts ./scripts
+
+# psycopg[binary] / cryptography / bcrypt 均有免编译 wheel，无需 gcc，镜像保持精简。
+RUN pip install --no-cache-dir -e .
+
+COPY deploy/entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY deploy/healthcheck.py /usr/local/bin/healthcheck.py
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+# 以非 root 运行：应用不需要写容器文件系统（日志走 stdout、数据库在外部）。
+RUN useradd --create-home --shell /usr/sbin/nologin llmbridge \
+    && chown -R llmbridge:llmbridge /app
+USER llmbridge
+
+EXPOSE 8000
+
+# 用 Python 标准库探活，省掉镜像里装 curl。
+HEALTHCHECK --interval=30s --timeout=5s --start-period=25s --retries=3 \
+    CMD ["python", "/usr/local/bin/healthcheck.py"]
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+CMD ["llmbridge-serve", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]

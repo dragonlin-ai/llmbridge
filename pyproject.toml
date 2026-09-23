@@ -1,0 +1,79 @@
+[project]
+name = "llmbridge"
+version = "1.0.0"
+description = "LLM 路由中转系统 —— OpenAI 兼容网关，输入文本经判定器决策后转发至最优下游大模型"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "齐活林", email = "93634776@qq.com" }]
+keywords = ["llm", "gateway", "router", "openai-compatible", "fastapi", "model-routing"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
+    "Framework :: FastAPI",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Internet :: WWW/HTTP :: HTTP Servers",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "pydantic>=2.6",
+    "pydantic-settings>=2.2",
+    "sqlalchemy[asyncio]>=2.0.29",
+    "aiosqlite>=0.20",
+    # PostgreSQL 异步驱动：Windows 与 Linux 统一用 psycopg3。
+    # 注意：不要改回 asyncpg —— 本机为 Windows，asyncpg 需 C 扩展编译，
+    # 原依赖里曾用 sys_platform != 'win32' 把它排除掉，导致 Windows 上根本无法切 PG。
+    "psycopg[binary]>=3.1",
+    "alembic>=1.13",
+    "httpx>=0.27",
+    "redis>=5.0",
+    "cryptography>=42.0",
+    "passlib[bcrypt]>=1.7",
+    "python-jose[cryptography]>=3.3",
+    "python-multipart>=0.0.9",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "gunicorn>=21.2",
+    "build>=1.2",
+    "setuptools>=77",
+    "wheel",
+]
+
+[project.scripts]
+# 三条命令存在的意义见 app/cli.py：把「Windows 必须带 --loop」这个坑固化进入口。
+llmbridge-serve = "app.cli:serve"
+llmbridge-seed = "app.cli:seed"
+llmbridge-catalog = "app.cli:catalog"
+
+[project.urls]
+Homepage = "https://github.com/linwf/llmbridge_python"
+Repository = "https://github.com/linwf/llmbridge_python"
+Issues = "https://github.com/linwf/llmbridge_python/issues"
+
+[build-system]
+# setuptools>=77 才支持 PEP 639 的 `license = "<SPDX>"` 与 `license-files`；
+# 用低版本会在构建时告警并回退成旧的 license 表写法。
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+# 依赖 `app/` 及各子包下的 `__init__.py`。缺了它 setuptools 会静默漏包，
+# 打出的 wheel 装完就 ModuleNotFoundError —— 已在本项目踩过一次。
+include = ["app*"]
+exclude = ["tests*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

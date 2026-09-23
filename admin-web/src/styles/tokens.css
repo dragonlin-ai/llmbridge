@@ -1,0 +1,131 @@
+/* ============================================================================
+   设计 Token —— 对齐 sub2api 前端设计系统
+   来源：Wei-Shaw/sub2api · frontend/tailwind.config.js + frontend/src/style.css
+   主色：Teal 青（#14b8a6）  中性色：Slate  暗色模式：.dark 类切换
+   ============================================================================ */
+
+:root {
+  color-scheme: light;
+
+  /* ── 主色 Teal（对齐 sub2api `primary`） ───────────────────────────── */
+  --p-50: #f0fdfa;
+  --p-100: #ccfbf1;
+  --p-200: #99f6e4;
+  --p-300: #5eead4;
+  --p-400: #2dd4bf;
+  --p-500: #14b8a6;
+  --p-600: #0d9488;
+  --p-700: #0f766e;
+  --p-800: #115e59;
+  --p-900: #134e4a;
+  --p-950: #042f2e;
+
+  /* ── 中性色 Slate（对齐 sub2api `accent` / `dark`） ────────────────── */
+  --n-50: #f8fafc;
+  --n-100: #f1f5f9;
+  --n-200: #e2e8f0;
+  --n-300: #cbd5e1;
+  --n-400: #94a3b8;
+  --n-500: #64748b;
+  --n-600: #475569;
+  --n-700: #334155;
+  --n-800: #1e293b;
+  --n-900: #0f172a;
+  --n-950: #020617;
+
+  /* ── 语义色 ────────────────────────────────────────────────────────── */
+  --c-success: #10b981;
+  --c-success-soft: #d1fae5;
+  --c-success-text: #047857;
+  --c-warning: #f59e0b;
+  --c-warning-soft: #fef3c7;
+  --c-warning-text: #b45309;
+  --c-danger: #ef4444;
+  --c-danger-soft: #fee2e2;
+  --c-danger-text: #b91c1c;
+  --c-purple: #8b5cf6;
+  --c-purple-soft: #ede9fe;
+  --c-purple-text: #6d28d9;
+  /* info 用于「说明性、非告警」的标注，如「单价为参照值」——
+     不能借用 warning（那是真有问题）也不能用 purple（层级色语义已被占用）。 */
+  --c-info-soft: #e0f2fe;
+  --c-info-text: #0369a1;
+
+  /* ── 表面 / 边框 / 文字 ────────────────────────────────────────────── */
+  --bg-app: var(--n-50);
+  --bg-surface: #ffffff;
+  --bg-subtle: var(--n-100);
+  --bg-hover: var(--n-100);
+  --bg-glass: rgba(255, 255, 255, 0.72);
+  --border-base: var(--n-100);
+  --border-strong: var(--n-200);
+  --text-1: var(--n-900);
+  --text-2: var(--n-600);
+  --text-3: var(--n-400);
+
+  /* ── 圆角（对齐 sub2api rounded-xl / 2xl） ─────────────────────────── */
+  --r-xs: 6px;
+  --r-sm: 8px;
+  --r-md: 12px;
+  --r-lg: 16px;
+  --r-xl: 20px;
+  --r-full: 9999px;
+
+  /* ── 阴影（对齐 sub2api boxShadow） ────────────────────────────────── */
+  --sh-card: 0 1px 3px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.06);
+  --sh-card-hover: 0 10px 40px rgba(0, 0, 0, 0.08);
+  --sh-glass: 0 8px 32px rgba(0, 0, 0, 0.08);
+  --sh-glass-sm: 0 4px 16px rgba(0, 0, 0, 0.06);
+  --sh-glow: 0 0 20px rgba(20, 184, 166, 0.25);
+  --sh-pop: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+
+  /* ── 布局尺寸 ──────────────────────────────────────────────────────── */
+  --sidebar-w: 256px;
+  --sidebar-w-collapsed: 72px;
+  --header-h: 64px;
+  --content-pad: 24px;
+
+  /* ── 字体 ──────────────────────────────────────────────────────────── */
+  --font-sans: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+    'Helvetica Neue', Arial, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+
+  /* ── 动效 ──────────────────────────────────────────────────────────── */
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* ============================================================================
+   暗色模式（对齐 sub2api `darkMode: 'class'`）
+   ============================================================================ */
+html.dark,
+.dark {
+  color-scheme: dark;
+
+  --bg-app: var(--n-950);
+  /* dark-800/50 叠加在 dark-950 上的等效实色 */
+  --bg-surface: #101829;
+  --bg-subtle: rgba(30, 41, 59, 0.5);
+  --bg-hover: rgba(30, 41, 59, 0.7);
+  --bg-glass: rgba(16, 24, 41, 0.72);
+  --border-base: #1c2740;
+  --border-strong: #334155;
+  --text-1: #f1f5f9;
+  --text-2: #cbd5e1;
+  --text-3: #64748b;
+
+  --c-success-soft: rgba(16, 185, 129, 0.16);
+  --c-success-text: #34d399;
+  --c-warning-soft: rgba(245, 158, 11, 0.16);
+  --c-warning-text: #fbbf24;
+  --c-danger-soft: rgba(239, 68, 68, 0.16);
+  --c-danger-text: #f87171;
+  --c-purple-soft: rgba(139, 92, 246, 0.16);
+  --c-purple-text: #a78bfa;
+  --c-info-soft: rgba(14, 165, 233, 0.16);
+  --c-info-text: #7dd3fc;
+
+  --sh-card: 0 1px 3px rgba(0, 0, 0, 0.3), 0 1px 2px rgba(0, 0, 0, 0.24);
+  --sh-card-hover: 0 10px 40px rgba(0, 0, 0, 0.45);
+  --sh-glass: 0 8px 32px rgba(0, 0, 0, 0.4);
+  --sh-pop: 0 10px 15px -3px rgba(0, 0, 0, 0.5), 0 4px 6px -2px rgba(0, 0, 0, 0.3);
+}
