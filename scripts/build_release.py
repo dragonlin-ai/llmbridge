@@ -38,7 +38,7 @@ RELEASE_DIR = ROOT / "release"
 
 # 打进发布包的顶层目录/文件（白名单式，避免把 .venv / node_modules / 本地库带进去）
 INCLUDE_DIRS = ("app", "scripts", "deploy", "docs")
-INCLUDE_FILES = ("README.md", "LICENSE", "CHANGELOG.md", ".env.example",
+INCLUDE_FILES = ("README.md", "README_EN.md", "LICENSE", "CHANGELOG.md", ".env.example",
                  "pyproject.toml", "MANIFEST.in", ".gitignore", ".gitattributes")
 INCLUDE_WEB = ("admin-web/dist",)
 
@@ -151,7 +151,8 @@ def assemble(version: str, stage: Path, python_dist: Path | None) -> None:
             "包内容：",
             "  app/            后端源码（FastAPI）",
             "  scripts/        幂等运维脚本（目录预置 / 历史库迁移）",
-            "  deploy/         部署产物（Dockerfile / compose / nginx / systemd / Windows 脚本）",
+            "  deploy/         部署产物（Dockerfile / Dockerfile.web / compose / nginx / systemd / Windows 脚本）",
+            "                  镜像发布：bash deploy/publish-image.sh（推送到容器库）",
             "  admin-web/dist/ 控制台前端静态产物（交给 nginx）",
             "  docs/           全阶段交付文档",
             "  dist-python/    Python sdist 与 wheel",

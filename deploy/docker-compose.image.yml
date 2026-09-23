@@ -1,0 +1,103 @@
+# LLM 路由中转系统 · Docker Compose 编排（容器库拉取形态）
+#
+# 与 deploy/docker-compose.yml 的区别，只有一句话：
+#   **这份文件不含任何 `build:` 段，全部镜像从容器库拉取，目标机不需要源码。**
+#
+# 用法（在仓库根目录执行；用 docker-deploy.sh --image 会自动生成 .env）：
+#   cp .env.example .env          # 改 JWT_SECRET / ENCRYPTION_MASTER_KEY / POSTGRES_PASSWORD
+#   # 可选：在 .env 里追加（不填就用下面 ${VAR:-默认} 的值）
+#   #   LLMBRIDGE_REGISTRY=registry.cn-hangzhou.aliyuncs.com/winyeahs
+#   #   LLMBRIDGE_TAG=1.0.0
+#   docker compose -f deploy/docker-compose.image.yml up -d
+#
+# 只有 4 个服务，没有源码目录、没有 bind mount、没有前端构建步骤：
+#   api  ← llmbridge-api:<tag>   后端
+#   web  ← llmbridge-web:<tag>   nginx + 已内置的 dist 与 nginx.conf
+#   db   ← postgres:16-alpine
+#   redis← redis:7-alpine
+#
+# ⚠️ 升级前先确认目标 tag 存在：`docker manifest inspect <image>`
+# ⚠️ 与 docker-compose.yml 共用 project name，因此**共用同一套数据卷**；
+#    两种形态互相切换时先 `down` 再 `up`，否则会留下上一种形态的孤儿容器。
+
+name: llmbridge
+
+services:
+  api:
+    # 没有 build 段。想本地改代码就回到 docker-compose.yml。
+    image: ${LLMBRIDGE_REGISTRY:-registry.cn-hangzhou.aliyuncs.com/winyeahs}/llmbridge-api:${LLMBRIDGE_TAG:-1.0.0}
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    environment:
+      # compose 内网用服务名 `db` 互访；这里覆盖 .env 里的 127.0.0.1。
+      # 驱动固定 psycopg3 —— 写成 asyncpg 会因为依赖未安装而启动即失败。
+      DATABASE_URL: postgresql+psycopg://llmbridge:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD 未设置}@db:5432/llmbridge
+      LLMBRIDGE_REPO_ROOT: /app
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "/usr/local/bin/healthcheck.py"]
+      interval: 30s
+      timeout: 5s
+      start_period: 25s
+      retries: 3
+    networks: [llmbridge]
+
+  web:
+    image: ${LLMBRIDGE_REGISTRY:-registry.cn-hangzhou.aliyuncs.com/winyeahs}/llmbridge-web:${LLMBRIDGE_TAG:-1.0.0}
+    restart: unless-stopped
+    ports:
+      - "${HTTP_PORT:-80}:80"
+    depends_on:
+      api:
+        condition: service_started
+    networks: [llmbridge]
+    # 前端产物与 nginx.conf 都在镜像里，所以这里**不需要任何 volumes**。
+    # 想临时改反代规则（例如加 HTTPS、调 client_max_body_size），挂一份覆盖即可：
+    # volumes:
+    #   - ../deploy/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    #   - ../deploy/certs:/etc/nginx/certs:ro
+
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: llmbridge
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD 未设置}
+      POSTGRES_DB: llmbridge
+      # 中文环境常踩：容器默认 C locale，中文排序/比较会不合预期。
+      POSTGRES_INITDB_ARGS: --encoding=UTF8 --locale=C
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U llmbridge -d llmbridge"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [llmbridge]
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [llmbridge]
+
+# 与 docker-compose.yml 同名，用于跨形态复用数据（见文件头说明）。
+volumes:
+  pgdata: {}
+  redisdata: {}
+
+networks:
+  llmbridge:
+    driver: bridge

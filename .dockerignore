@@ -27,11 +27,18 @@ release/
 .mypy_cache/
 .ruff_cache/
 
-# ---- 前端：镜像里不需要源码与依赖；dist 由 nginx 容器 bind mount ----
+# ---- 前端：后端镜像用不到源码与依赖；dist 由 nginx 容器 bind mount ----
+# 注意 deploy/Dockerfile.web 是**需要** admin-web 源码的（阶段一跑 npm ci + build），
+# 排除下面这些不影响它 —— 它们本来就该在镜像内重新生成，而不是从宿主机带进去。
 node_modules/
 admin-web/node_modules/
 admin-web/dist/
 admin-web/vite_*.log
+
+# tsbuildinfo 必须排除：vue-tsc -b 会据此判定「已是最新」而**跳过类型检查**，
+# 于是 `vue-tsc -b && vite build` 里的门禁在镜像构建中静默失效（dist 照样产出）。
+# 宿主机上残留一份就会踩到，表现为「本地类型报错、镜像却构建成功」。
+**/tsconfig.tsbuildinfo
 
 # ---- 文档与截图：与运行无关，且体量大 ----
 docs/

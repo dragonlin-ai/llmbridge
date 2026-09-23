@@ -26,6 +26,73 @@
 - 实测：全新空库零初始化直接起服务 → 24 条通道 / 13 家厂商 / 0 模型 / 1 管理员 / 4 评测样本；
   登录 200、概览页不 500、评测看板正常返回。
 
+### 一键部署脚本：四种部署方式
+
+- 新增 **`deploy/install.sh`（方式一：Linux 脚本安装，推荐）**：一条 `curl` 完成拉源码 →
+  建运行用户 → venv + 依赖 → 生成 `.env`（随机密钥）→ 首次引导 → 构建控制台前端 →
+  生成 Nginx 站点配置 → 注册 systemd 服务。幂等（重跑 = 升级），**绝不覆盖既有 `.env`**
+  —— `ENCRYPTION_MASTER_KEY` 一变，已存厂商密钥就全部解不开。
+  数据库默认策略：探测本机 `5432`，通即 PostgreSQL、不通即 SQLite，保证装完就能打开界面。
+- 新增 **`deploy/docker-deploy.sh`（方式二：Docker Compose，推荐）**：用 `node:22-alpine`
+  容器构建前端，**宿主机无需安装 Node.js**；子命令 `status / logs / down / purge / upgrade`。
+  `logs`、`down` 等运维子命令刻意不允许联网下载（部署目录被删时不会莫名开始拉源码）。
+- 新增 **`deploy/apple-container.sh`（方式三：macOS Apple container）**：面向 Apple Silicon +
+  macOS 26 的本地开发形态，默认单容器 + SQLite。Apple container 没有 compose 那样的依赖编排
+  与健康检查等待，硬管 PG + Redis + 应用三层就得自写启动轮询，脆弱难排障 —— 完整形态仍走方式二。
+- 新增 **`deploy/nginx-standalone.conf`**：裸机形态的站点配置模板（三个占位符由 `install.sh`
+  替换），与 compose 用的 `nginx.conf` 同源，同样包含 SSE 必需的四件套。
+- **补上一个此前会「装完打不开界面」的缺口**：后端不托管前端静态文件，控制台是需要 web 服务器
+  托管的独立 SPA。此前 `05-安装打包说明.md` §6.2 只用一句「前端交给 nginx」带过，既没给可用配置，
+  也没点明「不构建 `dist` 就是白屏」。现在脚本会自动构建并生成站点配置；构建不了（无 Node.js）时
+  明确告警并给出 `--frontend-only` 补装命令，**不静默跳过**。
+
+### 容器库镜像交付：目标机不再需要源码
+
+- 新增 **`deploy/Dockerfile.web`（前端镜像）**：多阶段构建，`node:22-alpine` 里跑
+  `npm ci` + `vue-tsc -b && vite build`，产物 `dist` 与 `deploy/nginx.conf` 一起进
+  `nginx:1.27-alpine`。**类型检查刻意不跳过** —— 镜像构建同样要过门禁。
+- 新增 **`deploy/docker-compose.image.yml`（纯拉取编排）**：api / db / redis / web，
+  **没有任何 `build:` 段**，零 volumes、零源码依赖。镜像名走 `LLMBRIDGE_REGISTRY` /
+  `LLMBRIDGE_TAG` 插值，默认 `registry.cn-hangzhou.aliyuncs.com/winyeahs`。
+- 新增 **`deploy/publish-image.sh`（发布侧）**：用 `buildx` 构建并推送 api + web 两个镜像。
+  每个镜像打两个标签 —— 浮动 `1.0.0` 与**不可变** `1.0.0-<git短sha>`，后者用于生产锁版本
+  与回滚（浮动标签会被后续推送静默覆盖）。固定带 `--provenance=false --sbom=false`，
+  避免 manifest list 出现 `unknown/unknown` 条目导致部分容器库拒绝拉取。
+  **凭据只走 `docker login` 或 `REGISTRY_USER`/`REGISTRY_PASSWORD` 环境变量，脚本内绝不落盘**；
+  `--dry-run` 不依赖 Docker 守护进程，没开 Docker 也能先看清会推什么。
+- **`deploy/docker-deploy.sh` 新增 `--image` 形态**：不下载源码、不构建前端，只取编排文件 +
+  生成 `.env` + `compose pull` + `up -d`。部署目录最终只有两样东西：编排文件与 `.env`。
+  `upgrade` 在该形态下是「拉新标签 + 重建容器」，不再 `git pull`。
+- `.env.example` 新增 `LLMBRIDGE_REGISTRY` / `LLMBRIDGE_TAG`。
+- `.dockerignore` 新增 `**/tsconfig.tsbuildinfo` 排除项：`vue-tsc -b` 会据此判定「已是最新」
+  而跳过类型检查，宿主机残留一份就会让前端镜像的类型门禁**静默失效**（dist 照样产出，
+  本地类型报错而镜像构建成功）。
+- 两种形态共用 compose 项目名与数据卷，换形态不丢数据；但服务名不同（`nginx` ↔ `web`），
+  切换前必须先 `down`，否则留下孤儿容器。
+- **验证边界（如实标注）**：`bash -n` 四脚本 PASS；`publish-image.sh --dry-run` 实跑通过
+  （仓库根定位、git 短 sha、双标签、四个路径参数均正确）；两个编排经
+  `docker compose config --services/--images` 语义核验通过（镜像形态正确解析出带仓库前缀的
+  `llmbridge-api` 与 `llmbridge-web`）；服务名 `api` 与 `nginx.conf` 的 `upstream` 一致性已交叉核对。
+  **但镜像本身从未真正构建过** —— 本机 Docker 守护进程未启动（`dockerDesktopLinuxEngine`
+  管道不存在），构建、推送、端到端起栈均未实测。首次发布的验证命令见
+  `docs/阶段五-部署与交付/05-安装打包说明.md` §11。
+
+### 中英双语 README
+
+- `README.md` 重写为完整交付文档：语言切换、部署前必读、**四种部署方式**
+  （脚本安装 / Docker Compose / Apple container / 源码编译，每种含前置条件 → 步骤 → 升级 → 常用命令）、
+  技术栈、配置、命令行、接口一览、工具调用边界、项目结构、已知限制。
+- 新增 `README_EN.md`，与中文版结构一一对应；`scripts/build_release.py` 的白名单已同步
+  （否则打出的发行包里会缺英文 README）。
+
+### 验证边界（如实标注）
+
+- 三个 shell 脚本：`bash -n` 通过 + shellcheck（v0.10.0，`-S warning`）**零告警**；
+  过程中修掉 3 处真实问题（`need_root` 用函数内 `$*` 回显会丢用户选项、两个未使用变量）。
+- 另做：模板占位符 ↔ sed 替换交叉核验、四个部署文件端口一致性、依赖文件存在性、
+  中英 README 引用完整性核验（44 项全部命中）。
+- **未做**：真实 Linux / macOS 机器上的端到端执行（开发机为 Windows，本机 Docker 守护进程未启动）。
+
 ## [1.0.0] - 2026-09
 
 首个公开版本。核心是「**OpenAI 兼容网关 + 智能路由**」：请求先进判定器判断任务类型，
