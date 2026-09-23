@@ -58,9 +58,9 @@ llmbridge-seed = "app.cli:seed"
 llmbridge-catalog = "app.cli:catalog"
 
 [project.urls]
-Homepage = "https://github.com/linwf/llmbridge_python"
-Repository = "https://github.com/linwf/llmbridge_python"
-Issues = "https://github.com/linwf/llmbridge_python/issues"
+Homepage = "https://github.com/dragonlin-ai/llmbridge"
+Repository = "https://github.com/dragonlin-ai/llmbridge"
+Issues = "https://github.com/dragonlin-ai/llmbridge/issues"
 
 [build-system]
 # setuptools>=77 才支持 PEP 639 的 `license = "<SPDX>"` 与 `license-files`；

@@ -370,7 +370,7 @@ llmbridge-catalog                                   # 实际写入（--keep-name
 **仓库形态**：单仓库（single repo）。前端 `admin-web/` 与后端 `app/` 同仓管理，仓库根目录即 Python 后端工程。
 
 ```
-llmbridge_python/
+llmbridge/
 ├── app/                          # 后端主包（FastAPI）
 │   ├── main.py                   # 应用装配，挂载 /v1 与 /admin 两个入口
 │   ├── api/

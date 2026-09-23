@@ -91,8 +91,8 @@
 
 ```bash
 # 1) 获取代码
-git clone https://github.com/linwf/llmbridge_python.git
-cd llmbridge_python
+git clone https://github.com/dragonlin-ai/llmbridge.git
+cd llmbridge
 
 # 2) 建虚拟环境并安装（-e 可编辑安装，改代码免重装）
 python -m venv .venv
@@ -214,7 +214,7 @@ python scripts/migrate_add_provider_channels.py     # 历史库补通道字段
 ## 目录结构
 
 ```
-llmbridge_python/
+llmbridge/
 ├── app/                      后端（FastAPI）
 │   ├── api/v1/               对外入口：OpenAI 兼容 + SSE
 │   ├── api/admin/            对内入口：控制台全部接口
