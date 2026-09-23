@@ -268,13 +268,18 @@ Kimi Code、火山方舟 Coding、阿里云百炼 Coding + Token、百度千帆 
 MiniMax Token、阶跃 Step Plan、小米 MiMo Token Plan；确认无订阅套餐的 4 家
 （DeepSeek / 零一万物 / 百川 / 硅基流动）只有资源包。
 
-预置写入为**幂等**脚本：
+预置写入为**幂等**脚本，且**服务启动时会自动执行**（`app/services/bootstrap.py`）：
 
 ```bash
 python scripts/migrate_add_provider_channels.py     # 幂等补 vendor / access_kind / protocol / terms_note 列 + 重建 CHECK
-python scripts/seed_provider_catalog.py --dry-run   # 预演，不落库
-python scripts/seed_provider_catalog.py             # 实际写入（--keep-names 保留手工改过的通道名；--prune-orphans 清理孤儿）
+llmbridge-catalog --dry-run                         # 预演，不落库
+llmbridge-catalog                                   # 实际写入（--keep-names 保留手工改过的通道名；--prune-orphans 清理孤儿）
+# 等价写法：python scripts/seed_provider_catalog.py [--with-models]
+# 默认只铺接入通道，模型池留空待手工添加；--with-models 才连目录参考模型（含参考单价）一起灌
 ```
+
+实现位于包内 `app/data/catalog_seed.py`（`scripts/seed_provider_catalog.py` 已退化为薄壳 CLI），
+因此 **wheel 安装下 `llmbridge-catalog` 同样可用** —— 不再依赖源码 `scripts/` 目录。
 
 匹配为**三级 + 认领保护**：① 按通道名 → ② 按「同厂商 + 同接入形态」（要求目录内该组合唯一，**唯一允许改写
 `base_url` 的路径**，用于端点变更后的原地修正）→ ③ 按 `base_url`（**目录内出现多次的 URL 视为歧义，不参与**）。

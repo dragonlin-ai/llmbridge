@@ -5,10 +5,10 @@
 # 构建（**上下文必须是仓库根目录**，因为要拷 app/ 与 scripts/）：
 #   docker build -f deploy/Dockerfile -t llmbridge-api:1.0.0 .
 #
-# 用 `pip install -e .` 而不是 `pip install .`：
-#   非可编辑安装会把 app/ 复制进 site-packages，于是 `llmbridge-catalog` 按
-#   `app/cli.py` 的相对位置找不到 `scripts/seed_provider_catalog.py`。可编辑安装
-#   让 app/ 原地留在 /app，厂商目录预置才能开箱即用。
+# 为什么仍推荐 `pip install -e .`（而不是 `pip install .`）：
+#   非可编辑安装会把 app/ 复制进 site-packages。厂商目录预置**已不再依赖** scripts/
+#   （实现在包内 app/data/catalog_seed.py），所以功能上两者都行；但可编辑安装让 app/
+#   原地留在 /app，`scripts/` 下的运维脚本（数据迁移等）也能直接跑，调试时改代码免重装。
 
 FROM python:3.13-slim
 

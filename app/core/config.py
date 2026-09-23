@@ -34,6 +34,11 @@ class Settings(BaseSettings):
     # 开发机置 True，生产必须 False（安全方案 §7）。
     allow_local_base_url: bool = False
 
+    # 首次运行引导：启动时自动「建表 + 建默认管理员 + 预置厂商接入目录」（均幂等）。
+    # 关掉它的场景：生产环境由 DBA 管库、不希望服务进程写 schema / 改目录数据。
+    # 关掉后需手工执行 `llmbridge-seed`（等价动作）。
+    auto_bootstrap: bool = True
+
     # 安全
     jwt_secret: str = "dev-only-change-me"
     jwt_expire_seconds: int = 86400

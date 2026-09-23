@@ -2,6 +2,30 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [未发布]
+
+### 首次运行引导：装完打开界面即可用
+
+- 新增 `app/services/bootstrap.py`，服务启动时自动完成四步（全部幂等，失败只记 ERROR
+  不阻塞启动）：建表 → 默认管理员 → 内置评测样本 → **预置厂商接入目录**。
+  此前要手工跑 `llmbridge-seed` + `llmbridge-catalog` 两步，漏掉第二步打开控制台就是
+  「一家厂商都没有」。实测：只跑旧的 seed 时库里只有 2 个开发用厂商，13 家主流接入商一个都不出现。
+- **`llmbridge-catalog` 不再依赖源码 `scripts/` 目录**：预置逻辑搬进
+  `app/data/catalog_seed.py`，wheel 安装后同样可用（此前纯 wheel 安装会以 exit 2 退出）。
+  `scripts/seed_provider_catalog.py` 保留为薄壳 CLI，附加 `--with-models`。
+- **模型池默认留空**：预置只铺「接入通道」，模型需在「模型池」页按自己账号实际可用的
+  Model ID 手工添加。目录参考模型（含官方参考单价）可用 `llmbridge-catalog --with-models`
+  显式灌入。理由：模型 ID 与计费口径因账号而异，预置一份「参考目录」会让人误以为已配置。
+- 新增配置项 `AUTO_BOOTSTRAP`（默认 `true`）。生产由 DBA 管库时可置 `false`，
+  改由运维显式跑 `llmbridge-seed`（与自动引导同源，行为一致）。
+- `llmbridge-seed` 语义变更：不再写入**与目录冲突的开发用假数据**
+  （2 家厂商 / 4 个示例模型 / 2 条示例路由规则）。示例模型名（`deepseek-chat` / `gpt-4o`）
+  已不在当前目录中，且与目录里的 DeepSeek 通道重复；`RouteRule.target_model_id` 是
+  非空外键，模型池留空时示例规则也写不进去。评测样本保留（模型真值留空，看板已支持）。
+- `deploy/entrypoint.sh` 简化为单次 `llmbridge-seed`（不再单独调 catalog）。
+- 实测：全新空库零初始化直接起服务 → 24 条通道 / 13 家厂商 / 0 模型 / 1 管理员 / 4 评测样本；
+  登录 200、概览页不 500、评测看板正常返回。
+
 ## [1.0.0] - 2026-09
 
 首个公开版本。核心是「**OpenAI 兼容网关 + 智能路由**」：请求先进判定器判断任务类型，

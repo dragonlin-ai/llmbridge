@@ -8,15 +8,22 @@
    的症状是「服务起来了、/health 也 200，但一访问数据库就 500」——极难排查。
    `llmbridge-serve` 把正确的事件循环固化进入口，任何平台一条命令即可起对。
 
-2. **初始化顺序容易搞错**：先建表/种子（`llmbridge-seed`），再灌厂商目录
-   （`llmbridge-catalog`）。少了第二步会出现「控制台里一家厂商都没有、不知道从哪接入」。
+2. **初始化不再是必须的手工步骤**：服务启动时会自动「建表 + 建默认管理员 + 写内置评测样本 +
+   预置厂商目录」（见 `app/services/bootstrap.py`），所以 `llmbridge-serve` 一条命令就能开出一个
+   可登录、有全部主流接入商的控制台。
+   本文件的 `seed` / `catalog` 是**手工等价物**，适用场景：
+   想先看预置报告再决定、想 `--dry-run` 试算、或生产环境用 `AUTO_BOOTSTRAP=false`
+   关掉自动引导后由运维显式执行。
+
+3. **`llmbridge-catalog` 曾经只能在源码 checkout 内运行** —— 逻辑放在 `scripts/`，
+   而 `scripts/` 不进 wheel（`MANIFEST.in` 只管 sdist），`pip install .` 之后该命令
+   会直接提示「找不到脚本」并退出 2。
+   逻辑现已搬进包内 `app/data/catalog_seed.py`，wheel / 容器整包安装同样可用。
 """
 from __future__ import annotations
 
 import argparse
 import asyncio
-import os
-import runpy
 import sys
 from pathlib import Path
 
@@ -25,27 +32,6 @@ from app.core.eventloop import selector_loop_factory
 # uvicorn 用「导入字符串」而不是实例，这样多 worker 与 --reload 才能被子进程正确重建。
 _APP = "app.main:app"
 _LOOP = "app.core.eventloop:selector_loop_factory"
-
-
-def _repo_root() -> Path | None:
-    """定位源码根目录（含 `scripts/seed_provider_catalog.py` 的那一层）。
-
-    三种安装方式下 `app/cli.py` 的位置不同，所以按可靠性依次尝试：
-    1. `LLMBRIDGE_REPO_ROOT` —— 容器/自定义布局时的显式出口；
-    2. `app/cli.py` 的上两级 —— 源码运行或 `pip install -e .` 的情况；
-    3. 当前工作目录 —— `pip install .` 装进 site-packages 后，从仓库根执行命令的兜底。
-
-    找不到返回 None，由调用方给出可执行提示，而不是抛一个看不懂的 FileNotFoundError。
-    """
-    candidates: list[Path] = []
-    if env := os.environ.get("LLMBRIDGE_REPO_ROOT"):
-        candidates.append(Path(env))
-    candidates.append(Path(__file__).resolve().parent.parent)
-    candidates.append(Path.cwd())
-    for candidate in candidates:
-        if (candidate / "scripts" / "seed_provider_catalog.py").is_file():
-            return candidate
-    return None
 
 
 def serve(argv: list[str] | None = None) -> int:
@@ -78,65 +64,66 @@ def serve(argv: list[str] | None = None) -> int:
 
 
 def seed(argv: list[str] | None = None) -> int:
-    """建表 + 写入最小可跑集（厂商/模型/规则/管理员/评测集）。已有数据则跳过。"""
-    parser = argparse.ArgumentParser(
-        prog="llmbridge-seed", description="建表并写入最小种子数据（幂等：已有数据则跳过）"
-    )
-    parser.parse_args(argv)
+    """建表 + 默认管理员 + 预置厂商接入目录（幂等）。
 
+    与启动自动引导同源（`app/services/bootstrap.py`），不会出现两套行为。
+    """
     from app.seed import main as seed_main
 
     # loop_factory 传的是**函数本身**，不能加括号 —— 加了会得到一个 loop 实例，
     # 再被 asyncio 当可调用对象使用，直接 TypeError。
-    asyncio.run(seed_main(), loop_factory=selector_loop_factory)
+    asyncio.run(seed_main(argv), loop_factory=selector_loop_factory)
     return 0
 
 
 def catalog(argv: list[str] | None = None) -> int:
     """预置内置厂商目录（13 家厂商的全部接入通道），幂等，支持 --dry-run。
 
-    目录脚本位于源码树的 `scripts/`，因此**必须在源码 checkout 内运行**；
-    wheel 安装后该目录不存在，会给出明确提示而不是栈回溯。
+    默认**只铺接入通道**：模型池初始为空，由使用者在「模型池」页按自己账号
+    实际可用的 Model ID 手工添加。要连目录参考模型（含官方参考单价）一起灌入，
+    显式加 `--with-models`。
     """
+    from app.data.catalog_seed import seed_catalog
+    from app.db.session import SessionLocal
+
     parser = argparse.ArgumentParser(
         prog="llmbridge-catalog", description="预置内置厂商目录（幂等，可重复执行）"
     )
+    parser.add_argument("--with-models", action="store_true",
+                        help="连目录参考模型一并预置（默认只铺接入通道）")
     parser.add_argument("--dry-run", action="store_true", help="只看会做什么，不写库")
-    parser.add_argument("--overwrite", action="store_true", help="覆盖已存在记录的说明/base_url 与模型参考价")
-    parser.add_argument("--prune-orphans", action="store_true", help="删除已不在目录中的通道行")
-    parser.add_argument("--report", default="seed_provider_catalog_report.txt", help="报告落盘路径")
-    args, passthrough = parser.parse_known_args(argv)
+    parser.add_argument("--overwrite", action="store_true",
+                        help="覆盖已存在记录的说明/base_url 与模型参考价")
+    parser.add_argument("--keep-names", action="store_true",
+                        help="保留库里已有的通道名，不按目录规范化")
+    parser.add_argument("--prune-orphans", action="store_true",
+                        help="删除已不在目录中的通道行（三重条件同时满足才删）")
+    parser.add_argument("--report", default="seed_provider_catalog_report.txt",
+                        help="报告落盘路径")
+    args = parser.parse_args(argv)
 
-    root = _repo_root()
-    if root is None:
-        print(
-            "找不到 scripts/seed_provider_catalog.py。\n"
-            "该命令需要源码 checkout（git clone 后的完整目录），"
-            "当前看起来是以 wheel 方式安装的。\n"
-            "请改用源码安装：pip install -e .  或直接运行 "
-            "python scripts/seed_provider_catalog.py",
-            file=sys.stderr,
-        )
-        return 2
+    async def _run() -> list[str]:
+        async with SessionLocal() as session:
+            lines = await seed_catalog(
+                session,
+                with_models=args.with_models,
+                overwrite=args.overwrite,
+                keep_names=args.keep_names,
+                prune_orphans=args.prune_orphans,
+            )
+            if args.dry_run:
+                await session.rollback()
+                lines.append("（dry-run：已回滚，未写库）")
+            else:
+                await session.commit()
+                lines.append("（已提交）")
+        return lines
 
-    script = root / "scripts" / "seed_provider_catalog.py"
-    script_argv = [str(script)]
-    if args.dry_run:
-        script_argv.append("--dry-run")
-    if args.overwrite:
-        script_argv.append("--overwrite")
-    if args.prune_orphans:
-        script_argv.append("--prune-orphans")
-    script_argv += ["--report", args.report, *passthrough]
-
-    saved_argv = sys.argv
-    sys.argv = script_argv
-    try:
-        # run_path 会执行脚本的 `if __name__ == "__main__":` 分支，
-        # 其中的 asyncio.run(..., loop_factory=...) 已按项目约定写好，此处不重复实现。
-        runpy.run_path(str(script), run_name="__main__")
-    finally:
-        sys.argv = saved_argv
+    lines = asyncio.run(_run(), loop_factory=selector_loop_factory)
+    report = "\n".join(lines)
+    # 报告同时落盘 —— 宿主环境（如 PowerShell）经常吞掉 stdout。
+    Path(args.report).write_text(report, encoding="utf-8")
+    print(report)
     return 0
 
 

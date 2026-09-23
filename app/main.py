@@ -72,6 +72,22 @@ async def _startup_selfcheck(settings) -> None:
 async def lifespan(app: FastAPI):
     settings = get_settings()
     await _startup_selfcheck(settings)
+
+    # 首次运行引导：建表 → 默认管理员 → 预置厂商目录（只铺接入商，模型池留空）。
+    # 为什么放在启动路径而不是让人记得跑命令：交付态原先要跑
+    # `llmbridge-seed` + `llmbridge-catalog` 两步，漏第二步打开控制台就是
+    # 「一家厂商都没有」；而 catalog 依赖源码 scripts/ 目录，wheel 装完根本跑不了。
+    # 三步都幂等、都不抛异常（失败只记 ERROR），不会阻塞启动。
+    # AUTO_BOOTSTRAP=false 可整体关掉（生产不想让服务写库时用）。
+    if settings.auto_bootstrap:
+        from app.services.bootstrap import run_first_run
+
+        result = await run_first_run()
+        logger.info("bootstrap: schema_created=%s admin=%s eval_cases=%s providers=%s%s",
+                    result["schema_created"], result["admin"], result["eval_cases"],
+                    result["providers"],
+                    f" counts={result.get('counts')}" if result.get("counts") else "")
+
     # 库级判定器配置（sys_config）：库 > .env > 默认。必须在 build_decider 之前加载，
     # 否则探活/看板仍按 .env 的旧值展示「配置值≠生效值」。表未迁移时不阻断启动。
     from app.services import sys_config as _syscfg

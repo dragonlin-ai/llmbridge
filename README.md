@@ -105,14 +105,16 @@ cp .env.example .env
 #   JWT_SECRET:            python -c "import secrets;print(secrets.token_urlsafe(32))"
 #   ENCRYPTION_MASTER_KEY: openssl rand -base64 32
 
-# 4) 初始化数据库（两个命令都是幂等的，可重复执行）
-llmbridge-seed                    # 建表 + 最小种子数据（厂商/模型/规则/管理员）
-llmbridge-catalog                 # 灌入内置厂商目录（13 家 / 24 通道 / 55 模型）
-# 只想看会做什么不写库：llmbridge-catalog --dry-run
-
-# 5) 启动
+# 4) 启动（首次启动会自动建表、建默认管理员、预置全部主流接入商——幂等，无需手动初始化）
 llmbridge-serve --host 127.0.0.1 --port 8000
 ```
+
+首次打开控制台即会看到 **13 家主流厂商 / 24 条接入通道**（按量 API + 编程订阅 + Token 订阅），
+全部处于「未接入」状态，**填一个 API Key 即可用**。
+
+**模型池初始为空**，这是有意的：你能用哪些 Model ID、什么价，取决于你的账号，
+网关不替你猜。在控制台「模型池」页按官方控制台确认的 ID 手工添加即可
+（可选：`llmbridge-catalog --with-models` 会额外灌入目录里的参考模型与官方参考单价）。
 
 验证：
 
@@ -147,14 +149,14 @@ npm run dev -- --host 127.0.0.1     # http://127.0.0.1:5173
 
 | 命令 | 作用 |
 |---|---|
-| `llmbridge-serve [--host] [--port] [--workers] [--reload]` | 启动网关。内置 psycopg3 兼容的事件循环，跨平台都是这一条 |
-| `llmbridge-seed` | 建表 + 写入最小可跑集。幂等；已有数据则跳过 |
-| `llmbridge-catalog [--dry-run] [--overwrite] [--prune-orphans] [--report PATH]` | 预置内置厂商目录。幂等，三级匹配认领旧行、不动已录密钥 |
+| `llmbridge-serve [--host] [--port] [--workers] [--reload]` | 启动网关。内置 psycopg3 兼容的事件循环，跨平台都是这一条。**启动时自动完成首次引导**（建表 / 默认管理员 / 内置评测样本 / 厂商接入目录），全部幂等 |
+| `llmbridge-seed [--force]` | 手工执行同一套引导。幂等；已就绪时全部跳过。生产用 `AUTO_BOOTSTRAP=false` 关掉自动引导后，由运维显式跑这一条 |
+| `llmbridge-catalog [--with-models] [--dry-run] [--overwrite] [--keep-names] [--prune-orphans] [--report PATH]` | 预置厂商接入目录。幂等，三级匹配认领旧行、不动已录密钥。默认**只铺接入通道** |
 
 源码内的运维脚本：
 
 ```bash
-python scripts/seed_provider_catalog.py --dry-run   # 同上，更细的选项
+python scripts/seed_provider_catalog.py --dry-run   # 同上（薄壳，逻辑在 app/data/catalog_seed.py）
 python scripts/migrate_sqlite_to_pg.py              # SQLite → PostgreSQL 数据搬迁
 python scripts/migrate_add_provider_channels.py     # 历史库补通道字段
 ```
@@ -280,7 +282,11 @@ docker compose -f deploy/docker-compose.yml up -d --build
 - **流式请求的 token 用量依赖上游**：若客户端未传 `stream_options.include_usage`，
   部分厂商不回 `usage`，该条日志的 token / 成本会记 0 —— 是「缺数据」，不是「零消耗」。
 - **纯 HTTP 抓取拿不到 JS 渲染站点正文**（仅 `ENABLE_TOOL_EXECUTION=true` 时相关）。
-- **`alembic/` 目录预留但未启用**：当前建表走 ORM `create_all`（`llmbridge-seed`），
+- **模型池默认是空的**：首次安装只预置接入商，不预置模型（各账号可用模型与计费口径不同）。
+  必须先在「模型池」页添加至少一个模型、并给通道填 Key，路由候选池才非空；
+  否则 `/v1` 请求会走兜底路径并如实报错，控制台概览也会是 0。
+  `.env` 的 `DEFAULT_MODEL_ID` 要指向**真实存在**的模型 id。
+- **`alembic/` 目录预留但未启用**：当前建表走 ORM `create_all`（服务启动引导 / `llmbridge-seed`），
   历史库升级走 `scripts/migrate_*.py`。
 - 目录里厂商参考价来自官方公开页，**订阅类套餐的单价是按额度折算的参照值**，
   不是真实边际成本；条款限制（如「仅限编程工具交互式使用」）原文随通道落库并在控制台警示。
