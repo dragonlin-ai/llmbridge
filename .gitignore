@@ -63,6 +63,8 @@ dist-ssr/
 npm-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+# TypeScript 增量编译缓存（vue-tsc -b 产出），每次构建都会变，不入库
+*.tsbuildinfo
 
 # ---- IDE / 操作系统 ----
 .idea/
