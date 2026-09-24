@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-labelledby="llmbridge-title llmbridge-desc">
+  <title id="llmbridge-title">llmbridge</title>
+  <desc id="llmbridge-desc">One request enters the gateway, is decided by the Jev decision core, and is routed to the best-fitting downstream model.</desc>
+
+  <defs>
+    <linearGradient id="llmbridge-bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0c5e57"/>
+      <stop offset="0.5" stop-color="#0f8d81"/>
+      <stop offset="1" stop-color="#1cb3a2"/>
+    </linearGradient>
+    <linearGradient id="llmbridge-sheen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.22"/>
+      <stop offset="0.5" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <!-- 底板：自带背景，因此在 GitHub 亮色 / 暗色主题下都可见 -->
+  <rect x="2" y="2" width="124" height="124" rx="28" fill="url(#llmbridge-bg)"/>
+  <rect x="2" y="2" width="124" height="124" rx="28" fill="url(#llmbridge-sheen)"/>
+
+  <!-- 链路：一次请求 → 判定 → 分岔到候选模型
+       （整组绕画布中心放大 1.15 倍：小尺寸下字形更饱满，四周仍留出安全边距） -->
+  <g transform="translate(64 64) scale(1.15) translate(-64 -64)">
+    <g fill="none" stroke="#ffffff" stroke-width="5" stroke-linecap="round">
+      <path d="M33 64H50"/>
+      <path d="M76 64C88 64 88 30 100 30"/>
+      <path d="M76 64H100"/>
+      <path d="M76 64C88 64 88 98 100 98"/>
+    </g>
+
+    <!-- 请求入站 -->
+    <circle cx="26" cy="64" r="7" fill="#ffffff"/>
+
+    <!-- 判定内核（菱形 = 在调用下游之前先做决策） -->
+    <path d="M63 51 76 64 63 77 50 64Z" fill="#ffffff"/>
+
+    <!-- 三个落点：L1 主通道 / L2 次选 / L3 兜底 -->
+    <g>
+      <circle cx="100" cy="30" r="8.5" fill="#ffffff"/>
+      <circle cx="100" cy="30" r="4.4" fill="#16a34a"/>
+      <circle cx="100" cy="64" r="8.5" fill="#ffffff"/>
+      <circle cx="100" cy="64" r="4.4" fill="#7c3aed"/>
+      <circle cx="100" cy="98" r="8.5" fill="#ffffff"/>
+      <circle cx="100" cy="98" r="4.4" fill="#dc2626"/>
+    </g>
+  </g>
+</svg>

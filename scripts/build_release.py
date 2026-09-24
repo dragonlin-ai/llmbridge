@@ -37,7 +37,8 @@ ROOT = Path(__file__).resolve().parent.parent
 RELEASE_DIR = ROOT / "release"
 
 # 打进发布包的顶层目录/文件（白名单式，避免把 .venv / node_modules / 本地库带进去）
-INCLUDE_DIRS = ("app", "scripts", "deploy", "docs")
+# .github/images 是 README 引用的图标与二维码，必须随包交付，否则包内 README 图片全断。
+INCLUDE_DIRS = ("app", "scripts", "deploy", "docs", ".github/images")
 INCLUDE_FILES = ("README.md", "README_EN.md", "LICENSE", "CHANGELOG.md", ".env.example",
                  "pyproject.toml", "MANIFEST.in", ".gitignore", ".gitattributes")
 INCLUDE_WEB = ("admin-web/dist",)

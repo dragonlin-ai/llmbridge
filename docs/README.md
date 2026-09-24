@@ -1,7 +1,7 @@
 # LLM 路由中转系统 · 项目文档中心
 
 > 工程方法论：**OPD（One-Person Development，一人AI开发·四维数字员工开发工程）**
-> 文档版本：V1.6.2 ｜ 建立日期：2026-09-21 ｜ 责任方：HD（齐活林，交付总监）
+> 文档版本：V1.6.3 ｜ 建立日期：2026-09-21 ｜ 责任方：HD（齐活林，交付总监）
 
 ---
 
@@ -453,6 +453,7 @@ llmbridge/
 | 2026-09-22 | **V1.6** | ① **订阅类套餐纳入路由**（推翻 V1.5 的「登记但不路由」）：新增第 5 种接入形态 **`token_plan`**（通用 Token 订阅套餐），`ROUTABLE_ACCESS_KINDS` 由 `{api,package,batch}` 扩为**全部五种形态**；该集合刻意保留，作为未来新增形态的闸门<br>② `provider` 表新增 **`terms_note`（TEXT）** 列承载厂商官方条款警示（独立成列因其常超 `remark` 的 255 上限）；`ck_provider_access_kind` 取值集合扩为含 `token_plan`<br>③ **合规风险由「挡住」改为「如实告知」**：条款原文落 `terms_note`，控制台可展开警示条，首次填 Key 时用 alert 弹窗二次告知并在 `auto_enabled` 中回传条款<br>④ **单价口径三条优先级**写进 catalog 模块 docstring；拿不到可折算单价的通道**刻意不收录模型**（绝不填 0 —— 填 0 会在 L3 成本因子上拿满分而霸占路由）<br>⑤ 内置目录由 15 条通道 / 27 模型扩为 **22 条通道 / 51 模型**（10 条订阅通道：5 `coding_plan` + 5 `token_plan`）——补齐**阿里云百炼 Token Plan**（用户点名遗漏项，现为 api / coding_plan / token_plan 三套隔离体系并存）、百度千帆 Token、腾讯云 Coding + Token、MiniMax Token、阶跃 Step Plan<br>⑥ **智谱 Coding 通道端点据官方文档修正**：`/api/anthropic` → `/api/coding/paas/v4`，protocol `anthropic` → `openai`（官方文档明确支持 Anthropic 与 OpenAI 两种协议，V1.5 依第三方转述误判为仅 Anthropic）<br>⑦ 迁移脚本改为**比对 CHECK 表达式字面量集合**而非仅比对约束名，避免「旧约束仍在、脚本却报已最新」的静默跳过<br>⑧ 预置脚本匹配升级为**三级 + `claimed` 认领保护**，新增「同厂商 + 同接入形态」级（唯一允许改写 `base_url` 的路径）；base_url 在目录内出现多次者视为歧义不参与回退匹配<br>⑨ 前端厂商页新增「**订阅类**」筛选、`is-info` 徽章「单价为参照值」、条款警示展开区、无模型通道的引导提示 | HD |
 | 2026-09-23 | **V1.6.1** | ① 内置目录新增**小米 MiMo**（`vendor=xiaomi-mimo`）：**按量 API**（`https://api.xiaomimimo.com/v1`，`sk-` Key）与 **Token Plan 订阅**（`https://token-plan-cn.xiaomimimo.com/v1`，个人版 `tp-` / 团队版 `ttp-` Key）两条**密钥互不通用**的通道；旗舰 `mimo-v2.6-pro`（3 / 6 元，命中缓存 0.025 元）与 `mimo-v2.6-flash`（1 / 2 元）在两条通道各收录一次，共 4 个模型，均标称 100 万上下文<br>② Token Plan 通道带**官方条款警示原文**（仅限编程工具交互式使用、禁止作为应用后端、额度耗尽即停且不转按量、不支持退款）<br>③ 鉴权头据官方文档核实：`Authorization: Bearer`（SDK 用法）与 `api-key`（curl 示例）**两种均被接受**，本网关适配器发前者可直接用<br>④ 小米「批量推理」另有**专属端点**（`https://batch-api-cn.xiaomimimo.com/v1`，约实时价 5 折），按 V1.5「`batch` 不单列通道」的约定仍**不建独立行**，端点与折扣写进 `api` 通道 `note` 备查，并提示批量接口可能为异步语义、启用前需确认<br>⑤ 预置数量扩为 **13 家厂商 / 24 条接入通道 / 55 个模型**（订阅类 11 条：5 `coding_plan` + 6 `token_plan`，合计 25 个模型；4 条暂无模型）<br>⑥ 单价口径留痕：`mimo-v2.5-pro` / `mimo-v2.5` 官方公告 2026-10-21 下线故未收录；UltraSpeed 未查到公开单价故未收录 —— 均只写进 `note`，不编造数字 | HD |
 | 2026-09-24 | **V1.6.2** | ① **文档层变更（不改接口 / 表结构 / 判定口径）**：中英双语 README 新增专章 **「决策内核：Jev」**，把判定模型从「一张表里的一行」提升为可对外宣讲的能力说明 —— 含 Jev 与「拿大模型当裁判」的逐项对照、Choice / Score / Noul 三原语、本项目真实请求体（一次调用并行 4 问）、「为什么不直接让 Jev 选 `model_id`」、接入现状与两条知情项<br>② **两条风险写进对外文档**：Jev 官方 API 未对中国大陆开放（境内直连 = 用户输入出境，默认 `JUDGE_PROVIDER=mock`）、厂商自报准确率约 68% 低于 85% 验收线（须自测），同条并入「已知限制」<br>③ 配置表补齐 3 个漏列的判定器变量：`JEV_API_KEY` / `JEV_BASE_URL` / `DECIDER_TIMEOUT_MS`<br>④ 版式：顶部加 `decider` 徽章 + 折叠目录（中英各 15 个锚点，已逐一核验）；标题 / 简介 / 徽章 / 语言切换四块居中（`<div align="center">` + 空行保 Markdown 解析，已用 GitHub 官方 GFM 渲染接口核对真实输出） | HD |
+| 2026-09-24 | **V1.6.3** | ① **文档层变更（不改接口 / 表结构 / 判定口径）**：中英双语 README 顶部新增**自绘矢量图标** `.github/images/llmbridge-logo.svg`（几何图标：请求入站 → 判定菱形 → 三个落点，落点色沿用界面既定语义 **L1 绿 / L2 紫 / L3 红**；自带渐变圆角底，故 GitHub 亮色与暗色主题下均可见；纯路径绘制、不依赖字体，任意尺寸清晰）<br>② 新增 **「交流与社区」章节**（中英各一份，位于「已知限制」之后、「许可证」之前）：微信交流二维码 `.github/images/微信交流.jpg`、Issues / Discussions 入口、商务联系邮箱，并同步折叠目录（各 16 个锚点）<br>③ `scripts/build_release.py` 的 `INCLUDE_DIRS` 增加 `.github/images` —— 否则发布包内的 README 图片全部断链 | HD |
 
 > 变更依据见 `阶段一-需求与规划/06-需求澄清记录.md`。
 

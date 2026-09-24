@@ -1,7 +1,9 @@
-<!-- The four top blocks (title / intro / badges / language switch) are centred: a GitHub HTML
+<!-- The top blocks (icon / title / intro / badges / language switch) are centred: a GitHub HTML
      block ends at a blank line, so the Markdown inside <div> is still parsed and heading
      anchors are unaffected. -->
 <div align="center">
+
+<img src=".github/images/llmbridge-logo.svg" alt="llmbridge" width="120" height="120">
 
 # LLM Routing Gateway (llmbridge)
 
@@ -39,6 +41,7 @@
 - [Project layout](#project-layout)
 - [Documentation index](#documentation-index)
 - [Known limitations](#known-limitations)
+- [Community](#-community)
 - [License](#license)
 
 </details>
@@ -1025,6 +1028,24 @@ llmbridge/
 - Vendor reference prices come from official public pages; **subscription plan prices are
   quota-derived reference values**, not real marginal cost. Terms restrictions (e.g. "interactive
   use in coding tools only") are stored verbatim with the channel and flagged in the console.
+
+---
+
+## 🤝 Community
+
+We welcome every developer and user: ask questions, share what you learned, contribute code,
+or just tell us what you built with it.
+
+<div align="center">
+<img src=".github/images/微信交流.jpg" width="300" alt="WeChat contact">
+<p align="center">Scan to reach us on WeChat</p>
+</div>
+
+**More links:**
+
+- **Bugs & feature requests (Issues):** open them at [GitHub Issues](https://github.com/dragonlin-ai/llmbridge/issues).
+- **Discussions:** deeper technical talk at [GitHub Discussions](https://github.com/dragonlin-ai/llmbridge/discussions).
+- **Contact:** for business or anything else, email `93634776@qq.com`.
 
 ---
 

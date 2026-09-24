@@ -1,6 +1,8 @@
-<!-- 顶部四块（标题 / 简介 / 徽章 / 语言切换）居中：GitHub 的 HTML 块在空行处结束，
+<!-- 顶部（图标 / 标题 / 简介 / 徽章 / 语言切换）居中：GitHub 的 HTML 块在空行处结束，
      因此 <div> 内部的 Markdown 仍会被正常解析，标题锚点不受影响。 -->
 <div align="center">
+
+<img src=".github/images/llmbridge-logo.svg" alt="llmbridge" width="120" height="120">
 
 # LLM 路由中转系统（llmbridge）
 
@@ -36,6 +38,7 @@
 - [项目结构](#项目结构)
 - [文档索引](#文档索引)
 - [已知限制](#已知限制)
+- [交流与社区](#-交流与社区)
 - [许可证](#许可证)
 
 </details>
@@ -954,6 +957,23 @@ llmbridge/
   shell 静态检查，但开发机为 Windows，无法执行 macOS 特有路径。首次使用请留意脚本输出。
 - 目录里厂商参考价来自官方公开页，**订阅类套餐的单价是按额度折算的参照值**，
   不是真实边际成本；条款限制（如「仅限编程工具交互式使用」）原文随通道落库并在控制台警示。
+
+---
+
+## 🤝 交流与社区
+
+我们欢迎所有开发者和用户加入社区：提问、分享经验、贡献代码，或者只是聊聊你把它用在了什么场景。
+
+<div align="center">
+<img src=".github/images/微信交流.jpg" width="300" alt="微信交流">
+<p align="center">扫码加微信交流</p>
+</div>
+
+**更多链接：**
+
+- **报告问题与建议（Issues）：** 到 [GitHub Issues](https://github.com/dragonlin-ai/llmbridge/issues) 提交你发现的 Bug 或功能建议。
+- **参与讨论（Discussions）：** 到 [GitHub Discussions](https://github.com/dragonlin-ai/llmbridge/discussions) 做更深入的技术探讨和想法交流。
+- **联系我们（Contact）：** 如有商务合作或其他事宜，请发邮件至 `93634776@qq.com`。
 
 ---
 
