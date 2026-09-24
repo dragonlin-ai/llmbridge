@@ -33,7 +33,11 @@ coverage.xml
 
 # ---- 日志 ----
 *.log
-logs/
+# 只忽略仓库根目录下的运行时日志目录；**绝不可写成裸 `logs/`**，否则会顺带吞掉
+# 源码里的 `admin-web/src/views/logs/`（调用日志页面），导致它永远不入库、
+# 发布包与 git 部署都缺这个文件、前端构建在 vue-tsc 阶段直接报
+# "Cannot find module '../views/logs/index.vue'"。
+/logs/
 
 # ---- 运行时落盘产物 ----
 # 日志队列满时 logbuffer 的丢弃落盘文件，属运行时产物，不入库

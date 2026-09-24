@@ -4,6 +4,23 @@
 
 ## [未发布]
 
+### 修掉前端构建在服务器上必挂：调用日志页面被 .gitignore 误吞 + Node 探测兜底
+
+- **根因**：`.gitignore` 里有一条裸 `logs/`（本意是忽略仓库根目录的运行时日志），
+  **却顺带把源码目录 `admin-web/src/views/logs/`（调用日志页面）整个排除出版本库**。
+  凡是以 git 为源的部署（git clone / 同步）都缺这个文件，前端 `vue-tsc` 阶段直接报
+  `Cannot find module '../views/logs/index.vue'` 而构建失败 —— 现象与根因相隔极远。
+- **修法**：把 `logs/` 收紧为 `/logs/`（只忽略仓库根目录的日志目录），`admin-web/src/views/logs/`
+  恢复入库；根目录运行时日志的忽略意图不受影响。已补 `git check-ignore` 复核：该文件不再被忽略、
+  根 `/logs` 仍被忽略。
+- **连带修掉 Node 探测的冗余下载**：`detect_node` 原先只靠 `command -v node/npm`，在受限的
+  `sudo` `secure_path` 下常探不到已装好的 Node（如系统已装 nodejs-22 却判定「低于 20」，
+  又去下载一份冗余的官方包、白耗时间）。现改为探测失败时**回退到常见绝对路径**
+  （`/usr/bin/node` 等、并优先取同目录的 npm），命中后**把该目录前置进 `PATH`**，
+  让 npm 子进程（vue-tsc/vite）也锁定同一份 node。
+- **文档同步**：`.gitignore` 注释写明「绝不可写裸 `logs/`」的教训；本轮变更**行为层
+  （部署脚本 + 忽略规则）**，未动任何接口、表结构或判定口径。
+
 ### 一键安装补上最后一环：Node.js 也自动装，并修掉提示里的坏命令
 
 - **`install.sh` 新增「自动装 Node.js」全流程**（`ensure_node`）：缺 Node 或版本 < 20 时

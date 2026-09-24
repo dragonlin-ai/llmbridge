@@ -471,14 +471,42 @@ EOF
 # =============================================================================
 
 detect_node() {
-    command -v node >/dev/null 2>&1 || return 1
-    command -v npm  >/dev/null 2>&1 || return 1
-    NODE_VER="$(node -v 2>/dev/null | sed 's/^v//')"
-    local major="${NODE_VER%%.*}"
+    local cand node_bin npm_bin ver major
+    # 1) 常规场景：PATH 里就有 node / npm（含 sudo 正常 secure_path 覆盖 /usr/bin 的情况）。
+    node_bin="$(command -v node 2>/dev/null || true)"
+    npm_bin="$(command -v npm 2>/dev/null || true)"
+    # 2) 兜底：某些发行版的 sudo secure_path 会砍掉 node 所在目录，PATH 里找不到，
+    #    但 node 其实是装好的（典型如系统已装 nodejs-22 却探测失败、又去下载冗余的官方包）。
+    #    这里直接探常见绝对路径；npm 优先取与 node 同目录的那份，避免版本错配。
+    if [ -z "$node_bin" ] || [ -z "$npm_bin" ]; then
+        for cand in /usr/bin/node /usr/local/bin/node /opt/node/bin/node \
+                    /usr/local/node/bin/node "$NODE_INSTALL_ROOT"/*/bin/node; do
+            [ -x "$cand" ] || continue
+            node_bin="$cand"
+            if [ -x "$(dirname "$cand")/npm" ]; then
+                npm_bin="$(dirname "$cand")/npm"
+            fi
+            break
+        done
+    fi
+    [ -n "$node_bin" ] || return 1
+    [ -n "$npm_bin" ] || npm_bin="$(command -v npm 2>/dev/null || true)"
+    [ -n "$npm_bin" ] || return 1
+
+    ver="$($node_bin -v 2>/dev/null | sed 's/^v//')"
+    major="${ver%%.*}"
     # 非数字（版本串异常）时 -ge 会报语法错，整个 test 的 stderr 丢掉即可。
     [ -n "$major" ] && [ "$major" -ge "$NODE_MIN_MAJOR" ] 2>/dev/null || return 1
-    NODE_BIN="$(command -v node)"
-    NPM_BIN="$(command -v npm)"
+    NODE_BIN="$node_bin"
+    NPM_BIN="$npm_bin"
+    NODE_VER="$ver"
+    # 把命中 node 的目录前置进 PATH：npm 子进程（vue-tsc/vite）的 shebang 是
+    # `#!/usr/bin/env node`，若本会话 PATH 里没有这个 node（正是探测失败的根因），
+    # 子进程会找不到 node 或错配版本。前置后整条链路都锁定同一份 node。
+    case ":$PATH:" in
+        *":$(dirname "$NODE_BIN"):"*) ;;
+        *) export PATH="$(dirname "$NODE_BIN"):$PATH" ;;
+    esac
     return 0
 }
 
