@@ -5,19 +5,22 @@
 # =============================================================================
 #
 #  用法：
-#    # 容器库形态（**目标机不需要任何源码**）—— 交付给客户时只要这一句：
+#    # 云端直拉镜像（**默认形态：不需要任何源码、不需要本地构建**）—— 交付给客户 / 生产首选：
 #    docker run --rm --entrypoint cat \
 #      registry.cn-hangzhou.aliyuncs.com/winyeahs/llmbridge-api:1.0.0 \
-#      /opt/llmbridge/deploy/docker-deploy.sh | bash -s -- --image
+#      /opt/llmbridge/deploy/docker-deploy.sh | bash -s --
+#    # 上面等价于显式加 --image；--image 现在就是默认行为，可省略。
 #
-#    # 仓库内（用当前源码）
-#    bash deploy/docker-deploy.sh
+#    # 换镜像库（阿里云以外的第三方镜像库）：
+#    docker run --rm --entrypoint cat \
+#      <第三方镜像库host>/<命名空间>/llmbridge-api:1.0.0 \
+#      /opt/llmbridge/deploy/docker-deploy.sh | bash -s -- --registry <第三方镜像库host>/<命名空间>
 #
-#    # 仓库内（容器库形态：不下载源码、不构建前端，全部镜像从容器库拉取）
-#    bash deploy/docker-deploy.sh --image
+#    # 本地已有源码、想改代码后再构建（可选形态）：
+#    bash deploy/docker-deploy.sh --source
 #
-#  目标机最低要求（容器库形态）：
-#    1) 装了 Docker（含 compose v2）；2) 能访问容器库。
+#  目标机最低要求（云端直拉形态）：
+#    1) 装了 Docker（含 compose v2）；2) 能访问容器库（默认阿里云 ACR，可用 --registry 换任意第三方镜像库）。
 #    就这两样 —— 不需要源码、不需要 Node、不需要 .env 模板、不需要登录容器库
 #    （镜像仓库是公开的，匿名可拉）、除容器库外不访问任何外网（编排文件内嵌在本脚本里）。
 #    脚本会自动生成含随机密钥的 .env、拉镜像、起容器、等健康检查、打印访问地址与账号。
@@ -47,11 +50,13 @@
 #    --port <n>         控制台对外端口（默认 8081）
 #    --pg-password <p>  PostgreSQL 密码（默认随机 32 位）
 #    --skip-frontend    跳过前端构建（仅在你已有 admin-web/dist 时使用）
-#    --image            容器库形态：不下载源码、不构建前端。编排文件已内嵌在本脚本里，
-#                       因此**不需要联网下载任何文件**（除容器库本身）：写编排 → 生成 .env
-#                       → 拉镜像 → 起容器 → 探活。镜像需先发布，见 publish-image.sh
-#    --registry <host/ns>  容器库地址与命名空间（配合 --image，默认阿里云 ACR）
-#    --tag <tag>           镜像版本标签（配合 --image，默认 1.0.0）
+#    --image            云端直拉形态（**默认**，可省略）：不下载源码、不构建前端。编排文件
+#                       已内嵌在本脚本里，因此**不需要联网下载任何文件**（除容器库本身）：
+#                       写编排 → 生成 .env → 拉镜像 → 起容器 → 探活。镜像需先发布，见 publish-image.sh
+#    --source           本地源码构建形态：不拉镜像，改用当前源码（或下载源码）本地构建。
+#                       只有「你有源码、要改了代码再构建」时才用；默认是云端直拉。
+#    --registry <host/ns>  容器库地址与命名空间（默认阿里云 ACR；可换任意第三方镜像库）
+#    --tag <tag>           镜像版本标签（云端直拉形态用，默认 1.0.0）
 #    -y, --yes          非交互
 #
 #  环境变量：
@@ -61,10 +66,10 @@
 #                                         不写进 .env、不落盘、不进日志。
 #
 #  两种形态的区别（别混用）：
-#    源码形态（默认）  镜像在本机构建；前端 dist 是 bind mount 进 nginx 的，
-#                      所以**必须**先 build 前端，且目标机要有源码目录。
-#    容器库形态(--image)  api 与 web 两个镜像自带全部内容（含 dist 与 nginx.conf），
-#                      目标机只需要一个编排文件和一个 .env，**不需要任何源码**。
+#    云端直拉形态（默认，即 --image）  镜像从容器库拉取，api 与 web 自带全部内容（含 dist 与 nginx.conf），
+#                      目标机只需要一个编排文件和一个 .env，**不需要任何源码、不需要本地构建**。
+#    源码形态（加 --source 开启）  镜像在本机构建；前端 dist 是 bind mount 进 nginx 的，
+#                      所以**必须**先 build 前端，且目标机要么持有源码、要么能访问 GitHub。
 #    两者共用同一个 compose 项目名与数据卷，切换前先 down。
 #
 #  为什么脚本要自己构建前端：
@@ -98,7 +103,7 @@ PG_PASSWORD=""
 SKIP_FRONTEND="false"
 ASSUME_YES="false"
 ACTION="deploy"
-USE_IMAGE="false"
+USE_IMAGE="true"
 REGISTRY="registry.cn-hangzhou.aliyuncs.com/winyeahs"
 IMAGE_TAG="1.0.0"
 
@@ -180,6 +185,7 @@ while [ $# -gt 0 ]; do
         --port)         HTTP_PORT="${2:?--port 需要参数}"; PORT_GIVEN="true"; shift 2 ;;
         --pg-password)  PG_PASSWORD="${2:?--pg-password 需要参数}"; shift 2 ;;
         --image)        USE_IMAGE="true"; shift ;;
+        --source)       USE_IMAGE="false"; shift ;;
         --registry)     REGISTRY="${2:?--registry 需要参数}"; shift 2 ;;
         --tag)          IMAGE_TAG="${2:?--tag 需要参数}"; shift 2 ;;
         --skip-frontend) SKIP_FRONTEND="true"; shift ;;

@@ -4,6 +4,22 @@
 
 ## [未发布]
 
+### 方式二默认改为「云端直拉镜像」：不需要源码、不需要本地构建
+
+- **默认形态翻转**：`docker-deploy.sh` 的 `USE_IMAGE` 由 `false` 改为 `true`，于是**默认就是云端直拉**
+  （等同旧的 `--image`）：目标机只要有 Docker + Compose v2、并能访问容器库，一条
+  `docker run ... | bash -s --` 就把 api + PostgreSQL + Redis + Nginx 四个容器拉起来 ——
+  **不需要下载源码、不需要本地构建、不需要 Node.js**，且**一个 GitHub 请求都没有**（脚本与镜像都从容器库取）。
+- **新增 `--source` 开关**：只有「本地已有源码、要改代码后再构建」时才显式加它，回落到本地源码构建
+  形态（下载源码 → 构建前端 → `compose up -d --build`）。`--image` 保留但已可省略（它现在就是默认行为），
+  老命令照旧可用，已在运行的实例不受影响。
+- **可换任意第三方镜像库**：`--registry <host>/<命名空间>`（或 `LLMBRIDGE_REGISTRY` 环境变量）不再绑死
+  阿里云 ACR；私有库仍可配 `REGISTRY_USER` / `REGISTRY_PASSWORD`，脚本在 `pull` 前自动
+  `docker login`（`--password-stdin`，凭据不落盘、不进日志）。
+- **文档口径统一**：README（中英）「方式二」整段重写为「云端直拉（默认）」+「形态 A · 本地源码构建（可选）」，
+  部署方式总表同步；`01-部署文档.md` §3.6 与 `05-安装打包说明.md` §6.1.1 更名并去掉示例命令里的 `--image`。
+- **范围**：部署脚本默认值 + 文档层，**未动任何接口、表结构或判定口径**。
+
 ### 修掉控制台反复 403 的最后一块：构建产物权限（DAC）被 umask 077 弄成 600/700
 
 - **根因（元凶）**：`write_env` 在「新建 .env」分支里把进程 `umask` 设成 `077` 后**全程未复位**。之后 `build_frontend` 用 vite 构建 `admin-web/dist` 时，文件被建成 `600`、目录被建成 `700`（`drwx------`，属主 `llmbridge`）。nginx 的 worker 以独立用户（RHEL 上是 `nginx`）运行，既进不去 `dist/`（无 `o+x`）也读不到文件（无 `o+r`）→ 控制台 403 Forbidden。上一轮的 SELinux 修复是必要条件但非充分条件，权限这块才是反复 403 的真凶；且重跑 `install.sh` 时 `build_frontend` 发现 `dist/index.html` 已存在会**跳过构建、也跳过修复**，所以怎么重跑都不好。

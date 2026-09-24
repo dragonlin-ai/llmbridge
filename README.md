@@ -224,7 +224,7 @@ POST https://api.typesafe.ai/v1/systemone        // Authorization: Bearer $JEV_A
 | 路由内核 | 自研三层判定（L1 规则 / L2 Jev 判定器 / L3 兜底），实现全局唯一一份 |
 | 加密 | AES-256-GCM（厂商密钥）+ JWT（控制台会话） |
 | Web 服务器 | Nginx（Docker Compose 形态内置；裸机形态由安装脚本**自动安装并配置**） |
-| 部署 | systemd（脚本安装）· Docker Compose · Apple container（macOS）· 源码 |
+| 部署 | systemd（脚本安装）· Docker Compose（云端直拉 / 本地源码构建）· Apple container（macOS）· 源码 |
 
 ---
 
@@ -251,9 +251,8 @@ POST https://api.typesafe.ai/v1/systemone        // Authorization: Bearer $JEV_A
 | 方式 | 适用场景 | 前置依赖 | 一句话 |
 |---|---|---|---|
 | **方式一 · 脚本安装**（推荐） | Linux 服务器生产部署 | Linux + Python 3.11+ | 一条 `curl` 装完 |
-| **方式二 · Docker Compose**（推荐） | 任意平台生产部署、想省去环境折腾 | Docker + Compose v2 | 一条 `curl` 起全栈 |
-| └ 形态 A · 源码构建 | 目标机有源码、要改代码 | 同上 | `up -d --build` |
-| └ 形态 B · 容器库镜像 | **目标机不需要任何源码**，适合交付给客户 | 同上，且能访问容器库 | 一条 `docker run` 装完 |
+| **方式二 · Docker Compose**（推荐） | 任意平台生产部署、交付给客户、省去环境折腾 | Docker + Compose v2，能访问容器库 | **一条 `docker run` 云端直拉镜像装完（默认不需要源码 / 不需要本地构建）** |
+| └ 形态 A · 本地源码构建（可选） | 你持有源码、要改代码后再构建 | 同上，且能访问 GitHub | `bash deploy/docker-deploy.sh --source` |
 | **方式三 · Apple container** | Apple Silicon Mac 本地开发 / 试用 | macOS 26+ + `container` 1.1.0+ | 三个子命令 |
 | **方式四 · 源码编译** | 二次开发、离线交付、定制 | Python 3.11+ / Node.js 20+ | 见下文 |
 
@@ -378,41 +377,230 @@ journalctl -u llmbridge -f          # 实时日志
 
 ### 方式二：Docker Compose（推荐）
 
-一条命令拉起 **api + PostgreSQL + Redis + Nginx** 四个容器。前端构建在容器内完成，
-**宿主机不需要装 Node.js**。
+默认就是**云端直拉镜像**：不需要源码、不需要本地构建、不需要 Node.js ——
+目标机只要有 **Docker + Compose v2**、并能访问容器库（默认阿里云 ACR，可换任意第三方镜像库），
+一条命令即可拉起 **api + PostgreSQL + Redis + Nginx** 四个容器。
+（如果你本地**已有源码**、想改了代码再构建，加 `--source` 走「形态 A · 本地源码构建」，见文末。）
 
 #### 前置条件
 
 - Docker Engine 20.10+（或 Docker Desktop），且守护进程已运行
 - Docker Compose **v2**（`docker compose` 子命令形式）
+- 能访问容器库（默认 `registry.cn-hangzhou.aliyuncs.com/winyeahs`；可用 `--registry` 换成任意第三方镜像库）
 
-#### 快速开始（一键部署）
+#### 快速开始（云端直拉，推荐）
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/dragonlin-ai/llmbridge/main/deploy/docker-deploy.sh | bash
+docker run --rm --entrypoint cat \
+  registry.cn-hangzhou.aliyuncs.com/winyeahs/llmbridge-api:1.0.0 \
+  /opt/llmbridge/deploy/docker-deploy.sh | bash -s --
+```
+
+就这一句。它会自动完成：落编排文件 → 生成 `.env`（随机 `JWT_SECRET` /
+`ENCRYPTION_MASTER_KEY` / `POSTGRES_PASSWORD`）→ `compose pull` → `compose up -d` →
+轮询 `/health` 直到就绪 → 打印控制台地址与默认账号。
+
+等价于显式加 `--image` —— `--image` 现在就是默认行为，可省略。
+`--entrypoint cat` 不能省：api 镜像默认入口会先做数据库初始化再起服务；脚本取出来交给
+**目标机本地的 bash** 执行，镜子里不跑任何部署动作。
+
+> **这条命令一个 GitHub 请求都没有**：脚本与镜像都从容器库取，所以它也是国内目标机的首选路径。
+
+常用变体（先把那条管道记成一个变量，后续子命令都能复用）：
+
+```bash
+LB='docker run --rm --entrypoint cat registry.cn-hangzhou.aliyuncs.com/winyeahs/llmbridge-api:1.0.0 /opt/llmbridge/deploy/docker-deploy.sh'
+
+$LB | bash -s -- --port 8080            # 换控制台端口（默认 8081）
+$LB | bash -s -- --dir /srv/llmbridge   # 换部署目录
+$LB | bash -s -- --tag 1.0.0-<git短sha> # 锁不可变版本（建议生产用）
+$LB | bash -s -- status                 # 状态 + 健康检查（api 镜像已在本机，不再联网）
+$LB | bash -s -- logs api               # 跟随某个服务日志
+$LB | bash -s -- down                   # 停止（保留数据卷）
+$LB > docker-deploy.sh                  # 只落盘，先审阅再跑
+```
+
+> 子命令请在**同一个目录**下执行（默认部署目录是 `./llmbridge`，与 `docker compose` 同理）。
+> 只想先看看脚本：`$LB > docker-deploy.sh`，然后 `bash docker-deploy.sh --help`。
+
+**换镜像库（阿里云以外的第三方镜像库）**：用 `--registry <host>/<命名空间>` 指定，脚本会按该地址拼
+`llmbridge-api` / `llmbridge-web` 两个镜像并拉取：
+
+```bash
+docker run --rm --entrypoint cat \
+  <第三方镜像库host>/<命名空间>/llmbridge-api:1.0.0 \
+  /opt/llmbridge/deploy/docker-deploy.sh | bash -s -- --registry <第三方镜像库host>/<命名空间>
+```
+
+私有容器库：任一写法都可以传 `REGISTRY_USER` / `REGISTRY_PASSWORD` 环境变量，
+脚本会在 `pull` 前自动 `docker login`（走 `--password-stdin`，凭据不落盘）：
+
+```bash
+REGISTRY_USER=<账号> REGISTRY_PASSWORD=<密码> bash docker-deploy.sh --registry <host>/<命名空间>
+```
+
+**更轻的写法**（可选）：另有一个 8 MB 的纯安装器镜像 `llmbridge-deploy`，只打印脚本。
+但它要求**该仓库在容器库里是公开的** —— 阿里云 ACR 新建仓库默认私有，匿名令牌不带
+pull 权限、直接 401。在控制台「容器镜像服务 → 命名空间 → 仓库 → 修改」里设为公开后：
+
+```bash
+docker run --rm registry.cn-hangzhou.aliyuncs.com/winyeahs/llmbridge-deploy:1.0.0 \
+  | bash -s --
+```
+
+（不想动这个设置就忽略上面这段，用 api 镜像那条即可 —— 两者拿到的是**同一份脚本**。）
+
+##### 发布镜像（发布侧，一次即可）
+
+```bash
+# 登录容器库（密码由 docker 自己读取，不经过任何脚本、不写入任何文件）
+docker login --username=<你的账号> registry.cn-hangzhou.aliyuncs.com
+
+# 构建并推送 api + web + deploy（默认 linux/amd64,linux/arm64 双架构）
+bash deploy/publish-image.sh --tag 1.0.0
+
+# 只交付 x86 服务器时显式指定单平台（跨架构走 QEMU 模拟，明显更慢）
+bash deploy/publish-image.sh --tag 1.0.0 --platform linux/amd64
+
+# 先看会执行什么命令、不真跑
+bash deploy/publish-image.sh --tag 1.0.0 --dry-run
+```
+
+脚本同时打两个标签：`1.0.0` 与 `1.0.0-<git短sha>`。**前者可被后续推送覆盖，后者不可变** ——
+出问题时能回到「当时那一版」（生产建议用不可变标签或 digest）。
+
+默认推送到 `registry.cn-hangzhou.aliyuncs.com/winyeahs/`，用 `--registry` 换命名空间：
+
+```bash
+bash deploy/publish-image.sh --registry registry.cn-hangzhou.aliyuncs.com/<你的命名空间> --tag 1.0.0
+```
+
+> ⚠️ 不要把容器库密码写进脚本、`.env` 或提交进仓库 —— 仓库里的明文口令等于公开。
+> CI 场景用 `REGISTRY_USER` / `REGISTRY_PASSWORD` 环境变量交给脚本（内部走
+> `docker login --password-stdin`），或改用容器库签发的临时凭证。
+
+#### 镜像里有什么
+
+容器库里三个镜像即构成完整交付，目标机不需要任何源码与本机构建：
+
+| 镜像 | 内容 |
+|---|---|
+| `llmbridge-api` | 后端（FastAPI + 路由引擎 + 迁移脚本）+ **安装脚本**（`/opt/llmbridge/deploy/`） |
+| `llmbridge-web` | nginx + 已内置的前端 `dist` 与 `nginx.conf` |
+| `llmbridge-deploy` | **安装器**：不含业务代码，只有那一个安装脚本（约 8 MB，可选） |
+
+> **为什么安装脚本要放进镜像**：脚本本身也得先送到目标机，而 GitHub
+> （`raw.githubusercontent.com`）在国内不可达 —— `curl ... | bash` 这条路在
+> 国内目标机上是**必然失败**的。容器库反而是目标机唯一一定能访问的地址
+> （否则业务镜像也拉不下来），所以脚本随 api 镜像交付；而安装流程随后要拉的
+> 就是这套镜像，**取脚本这一步不会多下载一个字节**。
+
+#### 部署目录与手工等价操作
+
+部署目录里最终只有两样东西：编排文件与 `.env`：
+
+```text
+llmbridge/
+├── .env
+└── deploy/docker-compose.image.yml
+```
+
+手工等价操作（在部署目录根下执行）：
+
+```bash
+docker compose --env-file ./.env -f deploy/docker-compose.image.yml pull
+docker compose --env-file ./.env -f deploy/docker-compose.image.yml up -d
+```
+
+> `--env-file ./.env` 同样不能省：`.env` 在部署目录根下，而编排文件在 `deploy/` 里，
+> 默认只会去找 `deploy/.env`。（脚本自己也是这么调的，所以一条命令那条路不受影响。）
+
+#### 访问
+
+浏览器打开 `http://<服务器IP>:<HTTP_PORT>/`（`HTTP_PORT` 默认 8081），
+默认账号 `admin / admin123`。对外 API 也在同一入口下：`http://<IP>:<HTTP_PORT>/v1/chat/completions`。
+
+#### 升级与回滚
+
+升级：把 `.env` 里的 `LLMBRIDGE_TAG` 改到新版本（建议写成不可变标签 `1.0.0-<git短sha>`），再拉取 + 起栈：
+
+```bash
+sed -i 's/^LLMBRIDGE_TAG=.*/LLMBRIDGE_TAG=1.0.1/' .env
+docker compose --env-file ./.env -f deploy/docker-compose.image.yml pull
+docker compose --env-file ./.env -f deploy/docker-compose.image.yml up -d
+```
+
+回滚：把 `LLMBRIDGE_TAG` 改回上一版的不可变标签，重跑上面两行。数据卷不动，无需动数据库。
+
+#### 数据与迁移
+
+PostgreSQL 与 Redis 数据存放在 Docker **命名卷**（`llmbridge_pgdata` / `llmbridge_redisdata`），
+容器重建不丢数据。整机迁移：
+
+```bash
+# 源服务器
+docker compose --env-file ./.env -f deploy/docker-compose.image.yml stop
+docker run --rm -v llmbridge_pgdata:/data -v "$PWD":/backup alpine \
+  tar czf /backup/pgdata.tar.gz -C /data .
+
+# 新服务器：还原到同名卷后再 up
+docker volume create llmbridge_pgdata
+docker run --rm -v llmbridge_pgdata:/data -v "$PWD":/backup alpine \
+  tar xzf /backup/pgdata.tar.gz -C /data
+```
+
+SQLite 形态（方式一默认、方式三默认）直接拷 `<数据目录>/llmbridge.db` 即可。
+
+#### 常见问题
+
+- **`pull` 报 manifest 不存在**：确认该 tag 已发布（发布脚本结束时会打印 digest，
+  也可用 `docker manifest inspect <镜像>:<tag>` 核对），并确认目标机架构在镜像支持列表里。
+- **控制台 404 / 空白**：`dist` 在 `llmbridge-web` 镜像里，没有「忘了构建前端」这一说；
+  若仍空白，先看 `web` 容器是否真的起来了。
+- **`exec format error`**：镜像架构与本机不符（如 arm64 镜像跑在 x86）。
+  重新发布时带上目标平台，或让 `publish-image.sh` 同时产出 amd64 与 arm64。
+
+#### 形态 A：本地源码构建（可选）
+
+如果你本地**已有源码**、想改了代码再构建（而不是从容器库拉取现成镜像），
+加 `--source` 走这一形态。**镜像在目标机构建**，前端 `dist` 通过 bind mount 进 nginx，
+所以目标机要么持有源码目录、要么能访问 GitHub（脚本会下载源码）。
+
+前置条件：与云端直拉相同（Docker + Compose v2）；若本机没有源码，还需能访问 `github.com`。
+
+快速开始（仓库内、用当前源码）：
+
+```bash
+bash deploy/docker-deploy.sh --source
+```
+
+或从任意机器下载源码再本地构建：
+
+```bash
+curl -sSL https://raw.githubusercontent.com/dragonlin-ai/llmbridge/main/deploy/docker-deploy.sh | bash -s -- --source
 ```
 
 脚本会：下载源码到 `./llmbridge` → 生成 `.env`（随机 `JWT_SECRET` /
 `ENCRYPTION_MASTER_KEY` / `POSTGRES_PASSWORD`）→ 用 `node:22-alpine` 容器构建前端 →
 `docker compose up -d --build` → 轮询 `/health` 直到就绪 → 打印访问地址。
 
-> ⚠️ 上面这条要能访问 `github.com`。**国内网络请直接看下面的「形态 B · 容器库镜像」**——
-> 那条路一个 GitHub 请求都没有，只有一句 `docker run`，脚本与镜像都从容器库取。
+> ⚠️ 上面这条要能访问 `github.com`（下载脚本与源码）。**国内网络、目标机不想碰 GitHub 时，
+> 直接走上面的「云端直拉」** —— 那条路一个 GitHub 请求都没有。
 
-常用选项与子命令：
+常用选项与子命令（形态 A）：
 
 ```bash
-bash deploy/docker-deploy.sh --port 8080        # 控制台对外端口（默认 8081）
-bash deploy/docker-deploy.sh --dir /srv/llmbridge
-bash deploy/docker-deploy.sh --skip-frontend    # 已有 admin-web/dist 时跳过构建
-bash deploy/docker-deploy.sh status             # 容器状态 + 健康检查
-bash deploy/docker-deploy.sh logs api           # 跟随某个服务日志
-bash deploy/docker-deploy.sh upgrade            # 拉代码 + 重建镜像 + 重启（数据保留）
-bash deploy/docker-deploy.sh down               # 停止（保留数据卷）
-bash deploy/docker-deploy.sh purge              # 停止并**删除数据卷**（不可恢复）
+bash deploy/docker-deploy.sh --source --port 8080        # 控制台对外端口（默认 8081）
+bash deploy/docker-deploy.sh --source --dir /srv/llmbridge
+bash deploy/docker-deploy.sh --source --skip-frontend    # 已有 admin-web/dist 时跳过构建
+bash deploy/docker-deploy.sh --source status             # 容器状态 + 健康检查
+bash deploy/docker-deploy.sh --source logs api           # 跟随某个服务日志
+bash deploy/docker-deploy.sh --source upgrade            # 拉代码 + 重建镜像 + 重启（数据保留）
+bash deploy/docker-deploy.sh --source down               # 停止（保留数据卷）
+bash deploy/docker-deploy.sh --source purge              # 停止并**删除数据卷**（不可恢复）
 ```
 
-#### 手动部署
+手动部署（形态 A）：
 
 ```bash
 # 1) 获取代码
@@ -452,31 +640,7 @@ openssl rand -base64 24 | tr -d '/+='                          # POSTGRES_PASSWO
 > ⚠️ `.env` 里的 `DATABASE_URL` 写的 `127.0.0.1` 是给「本机直连」用的；
 > compose 会用服务名 `db` 覆盖它，无需手动改。
 
-#### 数据与迁移
-
-PostgreSQL 与 Redis 数据存放在 Docker **命名卷**（`llmbridge_pgdata` / `llmbridge_redisdata`），
-容器重建不丢数据。整机迁移：
-
-```bash
-# 源服务器
-docker compose --env-file ./.env -f deploy/docker-compose.yml stop
-docker run --rm -v llmbridge_pgdata:/data -v "$PWD":/backup alpine \
-  tar czf /backup/pgdata.tar.gz -C /data .
-
-# 新服务器：还原到同名卷后再 up
-docker volume create llmbridge_pgdata
-docker run --rm -v llmbridge_pgdata:/data -v "$PWD":/backup alpine \
-  tar xzf /backup/pgdata.tar.gz -C /data
-```
-
-SQLite 形态（方式一默认、方式三默认）直接拷 `<数据目录>/llmbridge.db` 即可。
-
-#### 访问
-
-浏览器打开 `http://<服务器IP>:<HTTP_PORT>/`（`HTTP_PORT` 默认 8081），
-默认账号 `admin / admin123`。对外 API 也在同一入口下：`http://<IP>:<HTTP_PORT>/v1/chat/completions`。
-
-#### 升级
+升级（形态 A）：
 
 ```bash
 git pull
@@ -487,7 +651,7 @@ docker compose --env-file ./.env -f deploy/docker-compose.yml up -d --build
 > `--build` 是必需的：前端 `dist/` 是 bind mount 进 nginx 的，
 > **改了前端必须重新 build，重启容器不会生效**。
 
-#### 常用命令
+常用命令（形态 A）：
 
 ```bash
 docker compose --env-file ./.env -f deploy/docker-compose.yml ps               # 状态
@@ -497,157 +661,18 @@ docker compose --env-file ./.env -f deploy/docker-compose.yml down             #
 docker compose --env-file ./.env -f deploy/docker-compose.yml down -v          # 停止并删除数据（危险）
 ```
 
----
-
-#### 形态 B：从容器库拉取（不需要源码）
-
-上面「快速开始 / 手动部署 / 升级 / 常用命令」说的都是**形态 A（源码构建）**：
-镜像在目标机构建，前端 `dist` 通过 bind mount 进 nginx，所以目标机必须持有源码目录。
-
-**形态 B** 把前端也做成镜像，容器库里三个镜像即构成完整交付：
-
-| 镜像 | 内容 |
-|---|---|
-| `llmbridge-api` | 后端（FastAPI + 路由引擎 + 迁移脚本）+ **安装脚本**（`/opt/llmbridge/deploy/`） |
-| `llmbridge-web` | nginx + 已内置的前端 `dist` 与 `nginx.conf` |
-| `llmbridge-deploy` | **安装器**：不含业务代码，只有那一个安装脚本（约 8 MB，可选） |
-
-目标机只需要**一个地址、一条命令** —— 没有源码、不装 Node.js、不构建任何东西、
-也不需要去 GitHub 下载脚本。
-
-> **为什么安装脚本要放进镜像**：脚本本身也得先送到目标机，而 GitHub
-> （`raw.githubusercontent.com`）在国内不可达 —— `curl ... | bash` 这条路在
-> 国内目标机上是**必然失败**的。容器库反而是目标机唯一一定能访问的地址
-> （否则业务镜像也拉不下来），所以脚本随 api 镜像交付；而安装流程随后要拉的
-> 就是这套镜像，**取脚本这一步不会多下载一个字节**。
-
-##### 1) 发布镜像（发布侧，一次即可）
-
-```bash
-# 登录容器库（密码由 docker 自己读取，不经过任何脚本、不写入任何文件）
-docker login --username=<你的账号> registry.cn-hangzhou.aliyuncs.com
-
-# 构建并推送 api + web + deploy（默认 linux/amd64,linux/arm64 双架构）
-bash deploy/publish-image.sh --tag 1.0.0
-
-# 只交付 x86 服务器时显式指定单平台（跨架构走 QEMU 模拟，明显更慢）
-bash deploy/publish-image.sh --tag 1.0.0 --platform linux/amd64
-
-# 先看会执行什么命令、不真跑
-bash deploy/publish-image.sh --tag 1.0.0 --dry-run
-```
-
-脚本同时打两个标签：`1.0.0` 与 `1.0.0-<git短sha>`。**前者可被后续推送覆盖，后者不可变** ——
-出问题时能回到「当时那一版」（生产建议用不可变标签或 digest）。
-
-默认推送到 `registry.cn-hangzhou.aliyuncs.com/winyeahs/`，用 `--registry` 换命名空间：
-
-```bash
-bash deploy/publish-image.sh --registry registry.cn-hangzhou.aliyuncs.com/<你的命名空间> --tag 1.0.0
-```
-
-> ⚠️ 不要把容器库密码写进脚本、`.env` 或提交进仓库 —— 仓库里的明文口令等于公开。
-> CI 场景用 `REGISTRY_USER` / `REGISTRY_PASSWORD` 环境变量交给脚本（内部走
-> `docker login --password-stdin`），或改用容器库签发的临时凭证。
-
-##### 2) 安装（目标机，只要有 Docker —— 一条命令）
-
-```bash
-docker run --rm --entrypoint cat \
-  registry.cn-hangzhou.aliyuncs.com/winyeahs/llmbridge-api:1.0.0 \
-  /opt/llmbridge/deploy/docker-deploy.sh | bash -s -- --image
-```
-
-就这一句。它会自动完成：落编排文件 → 生成 `.env`（随机 `JWT_SECRET` /
-`ENCRYPTION_MASTER_KEY` / `POSTGRES_PASSWORD`）→ `compose pull` → `compose up -d` →
-轮询 `/health` 直到就绪 → 打印控制台地址与默认账号。
-
-> `--entrypoint cat` 不能省：api 镜像默认入口会先做数据库初始化再起服务。
-> 脚本取出来就交给**目标机本地的 bash** 执行，镜子里不跑任何部署动作。
-
-常用变体（先把那条管道记成一个变量，后面所有子命令都能复用）：
-
-```bash
-LB='docker run --rm --entrypoint cat registry.cn-hangzhou.aliyuncs.com/winyeahs/llmbridge-api:1.0.0 /opt/llmbridge/deploy/docker-deploy.sh'
-
-$LB | bash -s -- --image               # 安装（默认端口 8081、部署到 ./llmbridge）
-$LB | bash -s -- --image --port 8080   # 换控制台端口
-$LB | bash -s -- --image --dir /srv/llmbridge
-$LB | bash -s -- --image --tag 1.0.0-<git短sha>   # 锁不可变版本
-
-$LB | bash -s -- status                # 状态 + 健康检查（api 镜像已在本机，不再联网）
-$LB | bash -s -- logs api              # 跟随某个服务日志
-$LB | bash -s -- down                  # 停止（保留数据卷）
-```
-
-> 子命令请在**同一个目录**下执行（默认部署目录是 `./llmbridge`，与 `docker compose` 同理）。
->
-> 只想先看看脚本、不安装：`$LB > docker-deploy.sh`，然后 `bash docker-deploy.sh --help`。
-
-**更轻的写法**（可选）：另有一个 8 MB 的纯安装器镜像 `llmbridge-deploy`，只打印脚本。
-但它要求**该仓库在容器库里是公开的** —— 阿里云 ACR 新建仓库默认私有，匿名令牌不带
-pull 权限、直接 401。在控制台「容器镜像服务 → 命名空间 → 仓库 → 修改」里设为公开后：
-
-```bash
-docker run --rm registry.cn-hangzhou.aliyuncs.com/winyeahs/llmbridge-deploy:1.0.0 \
-  | bash -s -- --image
-```
-
-（不想动这个设置就忽略上面这段，用 api 镜像那条即可 —— 两者拿到的是**同一份脚本**。）
-
-私有容器库：任一写法都可以传 `REGISTRY_USER` / `REGISTRY_PASSWORD` 环境变量，
-脚本会在 `pull` 前自动 `docker login`（走 `--password-stdin`，凭据不落盘）：
-
-```bash
-REGISTRY_USER=<账号> REGISTRY_PASSWORD=<密码> bash docker-deploy.sh --image
-```
-
-在源码仓库内（自家运维）等价写法：
-
-```bash
-bash deploy/docker-deploy.sh --image --tag 1.0.0
-```
-
-部署目录里最终只有两样东西：编排文件与 `.env`。手工等价操作（在部署目录根下执行）：
-
-```bash
-docker compose --env-file ./.env -f deploy/docker-compose.image.yml pull
-docker compose --env-file ./.env -f deploy/docker-compose.image.yml up -d
-```
-
-> `--env-file ./.env` 同样不能省：`.env` 在部署目录根下，而编排文件在 `deploy/` 里，
-> 默认只会去找 `deploy/.env`。（脚本自己也是这么调的，所以一条命令那条路不受影响。）
-
-升级与回滚（数据卷不受影响）：
-
-```bash
-docker compose --env-file ./.env -f deploy/docker-compose.image.yml pull
-docker compose --env-file ./.env -f deploy/docker-compose.image.yml up -d      # 升到 .env 里写的 tag
-
-# 回滚：把 .env 的 LLMBRIDGE_TAG 改回上一版（或不可变标签），重跑上面两行
-```
-
-##### 3) 形态 A ↔ 形态 B 切换
+#### 形态 A ↔ 云端直拉 切换
 
 两种编排共用 compose 项目名 `llmbridge`，因此**共用同一套数据卷**
 （`llmbridge_pgdata` / `llmbridge_redisdata`）—— 换形态不丢数据。
-但服务名不同（A 是 `nginx`，B 是 `web`），切换前必须先停：
+但服务名不同（A 是 `nginx`，云端直拉是 `web`），切换前必须先停：
 
 ```bash
-docker compose --env-file ./.env -f deploy/docker-compose.yml down       # 从 A 切到 B 之前
+docker compose --env-file ./.env -f deploy/docker-compose.yml down       # 从 A 切到云端直拉之前
 docker compose --env-file ./.env -f deploy/docker-compose.image.yml up -d
 ```
 
 重建时若看到 `orphan containers` 警告，通常就是漏了这一步。
-
-##### 4) 常见问题
-
-- **`pull` 报 manifest 不存在**：确认该 tag 已发布（发布脚本结束时会打印 digest，
-  也可用 `docker manifest inspect <镜像>:<tag>` 核对），并确认目标机架构在镜像支持列表里。
-- **控制台 404 / 空白**：形态 B 的 `dist` 在 `llmbridge-web` 镜像里，没有「忘了构建前端」
-  这一说；若仍空白，先看 `web` 容器是否真的起来了。
-- **`exec format error`**：镜像架构与本机不符（如 arm64 镜像跑在 x86）。
-  重新发布时带上目标平台，或让 `publish-image.sh` 同时产出 amd64 与 arm64。
 
 ---
 
@@ -925,7 +950,7 @@ llmbridge/
 ├── scripts/                  幂等运维脚本（预置目录 / 历史库迁移 / 发行打包 / 交付核验）
 ├── deploy/                   部署产物
 │   ├── install.sh            ★ 方式一：Linux 一键安装（systemd）
-│   ├── docker-deploy.sh      ★ 方式二：Docker Compose 一键部署（源码形态 / `--image` 容器库形态）
+│   ├── docker-deploy.sh      ★ 方式二：Docker Compose 一键部署（默认云端直拉；`--source` 走本地源码构建）
 │   ├── publish-image.sh      ★ 容器库形态的发布侧：构建并推送 api + web + deploy 三个镜像
 │   ├── apple-container.sh    ★ 方式三：macOS Apple container
 │   ├── Dockerfile            后端镜像
