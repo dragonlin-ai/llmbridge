@@ -27,9 +27,16 @@
 - **文档同步**：README（中英）方式二改为四步快速开始块 + 标准 compose 命令；
   `01-部署文档.md` 顶部与 §3.6、`05-安装打包说明.md` §6.0 / §6.1.1（含布局树与手工等价命令）
   全部改写为 prepare → compose 两步口径。
+- **取脚本改为 Sub2API 同款 `curl`**：README（中英）与各部署文档的第 2 步由
+  `docker run --entrypoint cat …` 管道改为
+  `curl -sSL https://raw.githubusercontent.com/dragonlin-ai/llmbridge/main/deploy/docker-deploy.sh | bash`；
+  `raw.githubusercontent.com` 国内不可达时保留原镜像管道作为**等价退路**（全程零 GitHub）。
+  脚本的 `self_cmd` / `--help` 提示同步改为 curl 形态；「不需要 GitHub」的表述相应修正
+  （默认取脚本是一次 KB 级 GitHub 请求，换镜像载体才归零）。
 - **范围**：部署脚本 + 文档层，**未动任何接口、表结构或判定口径**。
-- ⚠️ **交付提醒**：one-liner 从 api 镜像内取脚本，需用 `deploy/publish-image.sh` **重推镜像**后，
-  客户拿到的才是新脚本。
+- ⚠️ **交付提醒**：默认 curl 路径在本提交推送后**即刻生效**（脚本随 main 分支走）；
+  但镜像退路取到的仍是旧脚本 —— 需用 `deploy/publish-image.sh` **重推镜像**后才同步
+  （本机 Docker daemon 未运行，本轮无法重推）。
 
 ### 方式二默认改为「云端直拉镜像」：不需要源码、不需要本地构建
 

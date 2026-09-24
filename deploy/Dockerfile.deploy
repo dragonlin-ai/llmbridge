@@ -21,10 +21,10 @@
 #      docker run --rm --entrypoint cat <api镜像> /opt/llmbridge/deploy/docker-deploy.sh \
 #        | bash -s --
 #
-# 为什么要有这个镜像（而不是让用户去下载脚本）：
+# 为什么还要提供这个镜像（默认取法是 curl raw GitHub）：
 #   1. GitHub 在国内基本不可达，raw.githubusercontent.com 更是超时 ——
-#      `curl .../docker-deploy.sh | bash` 这条路在国内目标机上是**必然失败**的。
-#      容器库反而是目标机唯一一定能访问的地址（否则镜像也拉不下来）。
+#      `curl .../docker-deploy.sh | bash` 在国内目标机上会**失败**，此时容器库
+#      反而是目标机唯一一定能访问的地址（否则镜像也拉不下来），本镜像即等价退路。
 #   2. 不需要把脚本文件 scp / 微信 / U 盘 传到目标机。
 #   3. 安装脚本与被安装的镜像**同版本同标签**，不会出现「拿了新版脚本装旧版镜像」。
 #

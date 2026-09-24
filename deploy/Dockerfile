@@ -35,10 +35,10 @@ COPY deploy/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY deploy/healthcheck.py /usr/local/bin/healthcheck.py
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
-# 部署脚本也放进镜像（约几十 KB）：容器库是目标机唯一一定能访问的地址，于是
-# 「安装脚本」可以随镜像一起交付，不必依赖 GitHub（国内不可达）。
-# **这是目标机安装脚本的首选载体** —— 安装流程随后要拉的就是这套镜像，
-# 所以取脚本这一步不会多下载一个字节：
+# 部署脚本也放进镜像（约几十 KB）：默认取法是 curl raw GitHub（Sub2API 同款），
+# 但国内访问 raw.githubusercontent.com 基本不可达 —— 此时**镜像就是取脚本的等价载体**：
+# 容器库是目标机唯一一定能访问的地址，而安装流程随后要拉的就是这套镜像，
+# 所以从镜像取脚本这一步不会多下载一个字节：
 #   docker run --rm --entrypoint cat <本镜像> /opt/llmbridge/deploy/docker-deploy.sh \
 #     | bash -s --
 # 必须带 --entrypoint cat：默认 entrypoint 会先跑数据库初始化再起服务。

@@ -6,16 +6,18 @@
 #
 #  用法（Sub2API 形态：脚本只生成配置，启停用标准 docker compose 命令）：
 #    mkdir -p llmbridge && cd llmbridge
-#    docker run --rm --entrypoint cat \
-#      registry.cn-hangzhou.aliyuncs.com/winyeahs/llmbridge-api:1.0.0 \
-#      /opt/llmbridge/deploy/docker-deploy.sh | bash -s --    # 只生成 ./docker-compose.yml + ./.env
+#    curl -sSL https://raw.githubusercontent.com/dragonlin-ai/llmbridge/main/deploy/docker-deploy.sh | bash
 #    docker compose up -d                                     # 启动（首次自动拉镜像）
 #    docker compose logs -f api                               # 跟随后端日志
 #
 #    # 脚本连启动一起做完（生成配置 + 拉镜像 + 起容器 + 等健康检查 + 打印地址）：
+#    curl -sSL https://raw.githubusercontent.com/dragonlin-ai/llmbridge/main/deploy/docker-deploy.sh | bash -s -- deploy
+#
+#    # GitHub（raw.githubusercontent.com）不可达时的等价取法 —— 从容器库的 api 镜像里取
+#    #（安装随后拉的就是这套镜像，取脚本不会多下载一个字节，且全程零 GitHub）：
 #    docker run --rm --entrypoint cat \
 #      registry.cn-hangzhou.aliyuncs.com/winyeahs/llmbridge-api:1.0.0 \
-#      /opt/llmbridge/deploy/docker-deploy.sh | bash -s -- deploy
+#      /opt/llmbridge/deploy/docker-deploy.sh | bash -s --
 #
 #    # 换镜像库（阿里云以外的第三方镜像库）：生成时追加
 #    #   --registry <第三方镜像库host>/<命名空间>
@@ -25,22 +27,23 @@
 #    bash deploy/docker-deploy.sh deploy --source
 #
 #  目标机最低要求（云端直拉形态）：
-#    1) 装了 Docker（含 compose v2）；2) 能访问容器库（默认阿里云 ACR，可用 --registry 换任意第三方镜像库）。
-#    就这两样 —— 不需要源码、不需要 Node、不需要 .env 模板、不需要登录容器库
-#    （镜像仓库是公开的，匿名可拉）、除容器库外不访问任何外网（编排文件内嵌在本脚本里）。
+#    1) 装了 Docker（含 compose v2）；2) 能访问容器库（默认阿里云 ACR，可用 --registry 换任意第三方镜像库）；
+#    3) 默认的 curl 取脚本要能访问 GitHub（raw）—— 国内不可达就换成上面那条镜像取法（零 GitHub）。
+#    不需要源码、不需要 Node、不需要 .env 模板、不需要登录容器库（镜像仓库是公开的，匿名可拉）；
+#    编排文件内嵌在本脚本里，除「取脚本这一次（KB 级）」与容器库外不访问任何外网。
 #    默认只在当前目录生成编排文件与含随机密钥的 .env（不碰 Docker）；末尾加 deploy 才会
 #    拉镜像、起容器、等健康检查、打印访问地址与账号。
 #
-#  为什么安装脚本要从容器库的镜像里取：
-#    脚本本身也得先送到目标机，而 GitHub（raw.githubusercontent.com）在国内不可达 ——
-#    `curl ... | bash` 在目标机上是**必然失败**的；容器库反而是目标机唯一一定能访问的
-#    地址（否则业务镜像也拉不下来）。api 镜像里放了本脚本的一份
-#    （/opt/llmbridge/deploy/docker-deploy.sh），而安装流程随后要拉的就是这套镜像，
-#    所以取脚本这一步**不会多下载一个字节**。
-#    ⚠️ `--entrypoint cat` 不能省：api 镜像默认入口会先做数据库初始化再起服务。
+#  脚本怎么送到目标机（两个载体等价，默认 curl）：
+#    默认与 Sub2API 同款 —— `curl -sSL https://raw.githubusercontent.com/<仓库>/main/
+#    deploy/docker-deploy.sh | bash`：KB 级一次请求、随 main 分支同步，与方式一
+#    install.sh 是同一取法。
+#    raw.githubusercontent.com 在国内不可达时，改从容器库的 api 镜像里取（零 GitHub，
+#    且安装随后拉的就是这套镜像，取脚本**不会多下载一个字节**）—— 见上面的 docker run。
+#    ⚠️ 镜像取法的 `--entrypoint cat` 不能省：api 镜像默认入口会先做数据库初始化再起服务。
 #    另有 8 MB 的纯安装器镜像 <registry>/llmbridge-deploy（更轻，但要求该仓库在容器库
 #    里被设为公开，否则匿名拉取 401），以及 `bash deploy/docker-deploy.sh`（自家运维在
-#    源码仓库里用）—— 三者跑的是同一个脚本、同一套编排，结果一致。
+#    源码仓库里用）—— 无论走哪个载体，跑的都是同一个脚本、同一套编排，结果一致。
 #
 #  子命令：
 #    (无) / prepare  **默认**：只在当前目录生成 ./docker-compose.yml + ./.env
@@ -131,12 +134,12 @@ step() { printf '\n%s==> %s%s\n' "$C_BOLD" "$*" "$C_OFF"; }
 usage() {
     # 打印文件头部的注释块。用 shell 内建而非 awk —— 有些环境确实没有 awk
     # （本项目的开发机 Git Bash 就是，awk/head/wc 全缺），那样 `--help` 会是空白。
-    # `docker run ... | bash -s -- --help` 这种管道执行时 $0 不是路径、读不到脚本自身，
+    # `curl ... | bash -s -- --help` 这种管道执行时 $0 不是路径、读不到脚本自身，
     # 于是退化为提示 —— 想把完整用法打出来，先把脚本落盘（见下面的提示命令）。
     if [ ! -f "$0" ]; then
         echo "llmbridge Docker Compose 一键部署脚本。"
-        printf '完整用法：docker run --rm %s/llmbridge-deploy:%s > docker-deploy.sh && bash docker-deploy.sh --help\n' \
-            "$REGISTRY" "$IMAGE_TAG"
+        printf '完整用法：curl -sSL https://raw.githubusercontent.com/%s/main/deploy/docker-deploy.sh -o docker-deploy.sh && bash docker-deploy.sh --help\n' \
+            "$REPO_SLUG"
         exit 0
     fi
     local lineno=0 line
@@ -153,18 +156,18 @@ usage() {
 }
 
 # 把「怎么再次调用本脚本」算成一个字符串，供文案里复用。
-#   在磁盘上跑（仓库内 / 手工落盘）→ `bash <路径> <子命令>`
-#   管道里跑（docker run ... | bash -s --）→ 用同一条 docker run 管道再调一次
-#     （安装器镜像这时已经在本机了，不需要联网）
+#   在磁盘上跑（仓库内 / 手工落盘 / curl -o 落盘）→ `bash <路径> <子命令>`
+#   管道里跑（curl ... | bash -s --）→ 用同一条 curl 管道再调一次
+#     （走镜像载体的用户把 curl 换成自己那条 docker run 管道即可）
 # 不这样区分的话，管道形态下会打出 `bash bash logs` 这种没法照做的提示。
 self_cmd() {
     if [ -f "$0" ]; then
         printf 'bash %s' "$0"
     else
-        # 管道形态：用「同一条 docker run 管道」再调一次（api 镜像这时已在本机，不必联网）。
-        # 与脚本头部推荐的那一条保持一致（安装脚本的载体是 api 镜像，见头部说明）。
-        printf 'docker run --rm --entrypoint cat %s/llmbridge-api:%s /opt/llmbridge/deploy/docker-deploy.sh | bash -s --' \
-            "$REGISTRY" "$IMAGE_TAG"
+        # 管道形态：用「同一条 curl 管道」再调一次（脚本已随管道送到位，不必落盘）。
+        # 与脚本头部推荐的那一条保持一致（默认取法是 curl raw GitHub，见头部说明）。
+        printf 'curl -sSL https://raw.githubusercontent.com/%s/main/deploy/docker-deploy.sh | bash -s --' \
+            "$REPO_SLUG"
     fi
 }
 
@@ -367,11 +370,10 @@ resolve_source() {
 # nginx.conf，目标机剩下的可变部分只有「编排文件 + .env」。
 # 编排文件里 env_file 写的是 ../.env，与放置位置（<部署目录>/deploy/）配套。
 #
-# 为什么编排改为**内嵌**进本脚本（原来是 curl 下载 raw.githubusercontent.com）：
-#   国内网络下 raw.githubusercontent.com 基本不可达 —— 那条下载路径在目标机上
-#   必然超时失败；而这个脚本本身也只能靠 scp/微信/U 盘进目标机（GitHub 同样拉不动）。
-#   内嵌之后目标机只需要这一个文件：`bash docker-deploy.sh --image` 全程除容器库
-#   外不访问任何外网。
+# 为什么编排改为**内嵌**进本脚本：拿到脚本之后，目标机不再需要下载任何编排文件 ——
+#   `prepare` 直接把内嵌副本写成 ./docker-compose.yml。默认经 curl 取脚本时，联网的
+#   只有那一次 KB 级请求；换成镜像载体（国内 raw 不可达的退路）后连这一次也没有。
+#   两种取法下，脚本执行过程本身都只访问容器库（compose pull / 镜像拉取），不访问其它外网。
 #
 # ⚠️ 内嵌副本与 deploy/docker-compose.image.yml 内容等价，是「两份」。改其一
 #    必须同步另一；在仓库内执行时会自动比对，不一致就告警（见 resolve_image_source）。

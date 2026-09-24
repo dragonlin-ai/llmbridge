@@ -11,9 +11,11 @@
 #    # 2) 构建并推送 api + web + deploy 三个镜像
 #    bash deploy/publish-image.sh --tag 1.0.0
 #
-#    # 3) 目标机安装（生成配置，随后 docker compose up -d；不需要源码、不需要 GitHub）
-#    docker run --rm --entrypoint cat registry.cn-hangzhou.aliyuncs.com/winyeahs/llmbridge-api:1.0.0 \
-#      /opt/llmbridge/deploy/docker-deploy.sh | bash -s --
+#    # 3) 目标机安装（生成配置，随后 docker compose up -d；不需要源码）
+#    curl -sSL https://raw.githubusercontent.com/dragonlin-ai/llmbridge/main/deploy/docker-deploy.sh | bash
+#    # GitHub 不可达（国内常见）时的等价取法（全程零 GitHub）：
+#    # docker run --rm --entrypoint cat registry.cn-hangzhou.aliyuncs.com/winyeahs/llmbridge-api:1.0.0 \
+#    #   /opt/llmbridge/deploy/docker-deploy.sh | bash -s --
 #
 #  三个镜像各自负责什么：
 #    llmbridge-api     后端（FastAPI + 应用代码 + 运维脚本 + **部署脚本**）
@@ -463,13 +465,15 @@ ${C_GREEN}${C_BOLD}${DONE_TITLE}${C_OFF}
   镜像        $BUILT_LIST
 $IMMUTABLE_NOTE
 
-${C_BOLD}目标机安装 —— 四步，不需要源码、不需要 GitHub${C_OFF}
+${C_BOLD}目标机安装 —— 四步，不需要源码${C_OFF}
   mkdir -p llmbridge && cd llmbridge
-  docker run --rm --entrypoint cat ${API_IMAGE}:${TAG} \\
-    /opt/llmbridge/deploy/docker-deploy.sh | bash -s --      # 只生成 ./docker-compose.yml + ./.env
+  curl -sSL https://raw.githubusercontent.com/dragonlin-ai/llmbridge/main/deploy/docker-deploy.sh | bash
   docker compose up -d                                       # 启动（首次自动拉镜像）
   docker compose logs -f api                                 # 跟随后端日志
 
+  # 第 2 步访问不了 GitHub（国内常见）→ 换等价的镜像取法（全程零 GitHub）：
+  #   docker run --rm --entrypoint cat ${API_IMAGE}:${TAG} \\
+  #     /opt/llmbridge/deploy/docker-deploy.sh | bash -s --
   # 末尾加 deploy = 配置 + 启动一条龙（生成 + pull + up + 等健康检查 + 打印地址）
   # 换端口：       ... | bash -s -- --port 8080
   # 锁不可变版本： ... | bash -s -- --tag ${IMMUTABLE_TAG:-<tag>}

@@ -411,7 +411,7 @@ journalctl -u llmbridge -f          # live logs
 ### Option 2: Docker Compose (recommended)
 
 Prerequisites: Docker 20.10+ (with `docker compose` v2) and access to the container
-registry. **No source code, no Node.js, no GitHub.**
+registry. **No source code, no Node.js.**
 
 **Quick start**:
 
@@ -420,9 +420,7 @@ registry. **No source code, no Node.js, no GitHub.**
 mkdir -p llmbridge && cd llmbridge
 
 # 2. Download and run the preparation script (writes ./docker-compose.yml + ./.env only; never touches Docker)
-docker run --rm --entrypoint cat \
-  registry.cn-hangzhou.aliyuncs.com/winyeahs/llmbridge-api:1.0.0 \
-  /opt/llmbridge/deploy/docker-deploy.sh | bash -s --
+curl -sSL https://raw.githubusercontent.com/dragonlin-ai/llmbridge/main/deploy/docker-deploy.sh | bash
 
 # 3. Start the services (images are pulled automatically on first run)
 docker compose up -d
@@ -430,6 +428,14 @@ docker compose up -d
 # 4. Follow the logs
 docker compose logs -f api
 ```
+
+> If GitHub is unreachable from step 2 (common in mainland China), fetch the script from
+> the container registry image instead — completely equivalent:
+>
+> ```bash
+> docker run --rm --entrypoint cat registry.cn-hangzhou.aliyuncs.com/winyeahs/llmbridge-api:1.0.0 \
+>   /opt/llmbridge/deploy/docker-deploy.sh | bash -s --
+> ```
 
 Then open `http://<server-ip>:8081/` and log in with `admin / admin123`
 (change the password right after first login).

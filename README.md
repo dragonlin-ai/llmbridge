@@ -377,7 +377,7 @@ journalctl -u llmbridge -f          # 实时日志
 ### 方式二：Docker Compose（推荐）
 
 前置条件：Docker 20.10+（含 `docker compose` v2）、能访问容器库。
-**不需要源码、不需要 Node.js、不需要 GitHub。**
+**不需要源码、不需要 Node.js。**
 
 **快速开始**：
 
@@ -386,9 +386,7 @@ journalctl -u llmbridge -f          # 实时日志
 mkdir -p llmbridge && cd llmbridge
 
 # 2. 下载并运行准备脚本（只生成 ./docker-compose.yml + ./.env，不碰 Docker）
-docker run --rm --entrypoint cat \
-  registry.cn-hangzhou.aliyuncs.com/winyeahs/llmbridge-api:1.0.0 \
-  /opt/llmbridge/deploy/docker-deploy.sh | bash -s --
+curl -sSL https://raw.githubusercontent.com/dragonlin-ai/llmbridge/main/deploy/docker-deploy.sh | bash
 
 # 3. 启动服务（首次自动拉取镜像）
 docker compose up -d
@@ -396,6 +394,13 @@ docker compose up -d
 # 4. 查看日志
 docker compose logs -f api
 ```
+
+> 第 2 步访问不了 GitHub（国内常见）时，换这条等价命令从容器库镜像取脚本，效果完全相同：
+>
+> ```bash
+> docker run --rm --entrypoint cat registry.cn-hangzhou.aliyuncs.com/winyeahs/llmbridge-api:1.0.0 \
+>   /opt/llmbridge/deploy/docker-deploy.sh | bash -s --
+> ```
 
 装完浏览器打开 `http://<服务器IP>:8081/`，用 `admin / admin123` 登录（首次登录后立即改密）。
 
