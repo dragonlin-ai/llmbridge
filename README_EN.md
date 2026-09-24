@@ -247,7 +247,7 @@ Client ────────────▶│  auth → rate limit → routi
 
 ---
 
-## ⚠️ Read before deploying
+## 🚨 Read before deploying
 
 1. **Change the default credentials `admin / admin123` immediately after the first login.**
 2. **Back up `ENCRYPTION_MASTER_KEY`.** Vendor API keys are encrypted with it; if it is lost,

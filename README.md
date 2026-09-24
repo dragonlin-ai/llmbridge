@@ -228,7 +228,7 @@ POST https://api.typesafe.ai/v1/systemone        // Authorization: Bearer $JEV_A
 
 ---
 
-## ⚠️ 部署前必读
+## 🚨 部署前必读
 
 1. **默认口令 `admin / admin123` 必须在首次登录后立即修改。**
 2. **`ENCRYPTION_MASTER_KEY` 必须备份。** 厂商 API Key 用它加密落库，
