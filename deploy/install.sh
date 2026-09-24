@@ -859,9 +859,20 @@ nginx_fix_selinux() {
             fi
             ;;
     esac
-    # 静态产物在 $INSTALL_DIR（非标准 web 目录），默认上下文不许 httpd 读 → 403。
-    if [ -d "$INSTALL_DIR/admin-web/dist" ] && command -v chcon >/dev/null 2>&1; then
-        chcon -R -t httpd_sys_content_t "$INSTALL_DIR/admin-web/dist" 2>/dev/null || true
+    # 静态产物在 $INSTALL_DIR（非标准 web 目录），SELinux 默认上下文不许 httpd 读 → 403。
+    # 关键：nginx 要读到 dist/index.html，必须能「穿过」/opt/llmbridge → admin-web → dist 每一层，
+    # 因此**整条路径**都要打 httpd_sys_content_t，只标 dist 会漏掉 admin-web 这一层（nginx 进不去→仍 403）。
+    if command -v chcon >/dev/null 2>&1; then
+        chcon -t httpd_sys_content_t "$INSTALL_DIR" 2>/dev/null || true
+        chcon -R -t httpd_sys_content_t "$INSTALL_DIR/admin-web" 2>/dev/null || true
+    fi
+    # 持久化：写进 SELinux 文件上下文规则并 restorecon，避免系统 relabel 后失效。
+    # 只覆盖「nginx 需要 traverse + 读取」的前端路径与安装根，绝不碰到后端/.venv/.env。
+    if command -v semanage >/dev/null 2>&1; then
+        semanage fcontext -a -t httpd_sys_content_t "${INSTALL_DIR}/admin-web(/.*)?" 2>/dev/null || true
+        semanage fcontext -a -t httpd_sys_content_t "${INSTALL_DIR}" 2>/dev/null || true
+        restorecon -R "${INSTALL_DIR}/admin-web" 2>/dev/null || true
+        restorecon "${INSTALL_DIR}" 2>/dev/null || true
     fi
 }
 
@@ -902,29 +913,47 @@ nginx_start_or_reload() {
 }
 
 nginx_http_probe() {
-    # 探活目标：确认 Nginx 真的在本机 NGINX_PORT 上监听并加载了站点配置。
-    # 判定标准 = 「该端口上有服务在应答」即可，不苛求返回 200：
-    #   · 返回 200（SPA 首页）→ 正常；
-    #   · 返回 403（SELinux 上下文偶发未生效）/ 502（后端还没完全起来）→ 站点配置已生效，
-    #     属「页面层」问题，已由 chcon / 后端探活各自覆盖，不应让安装脚本误判「未就绪」；
-    #   · 端口压根连不上 → 才是真正的「没配好」。
+    # 探活目标：确认 Nginx 真的在本机 NGINX_PORT 上「正常托管了控制台首页」。
+    # 判定标准 = 根路径必须返回 HTTP 200 才算就绪：
+    #   · 200 → SPA 首页可被 nginx 读取并吐出，真正就绪；
+    #   · 403 → nginx 在跑，但读不到前端目录（几乎都是 SELinux 拦读 /opt/llmbridge
+    #         下的静态文件，或目录权限问题）—— 这恰恰是「没配好」，绝不能误报就绪；
+    #   · 502 → 站点配置已生效，但后端 127.0.0.1:8000 没起 / 没热；
+    #   · 404 → 前端产物目录缺 index.html（构建没完成）；
+    #   · 端口连不上 → 才是 nginx 没起。
     # 必须显式绕开系统代理（Linux 常设 http_proxy，会把 127.0.0.1 请求送出去得假失败），
     # 并带几次重试，吃掉 nginx 刚 reload 完、端口尚未 bind 的那几百毫秒。
-    local url="http://127.0.0.1:${NGINX_PORT}/" i=0
+    local url="http://127.0.0.1:${NGINX_PORT}/" i=0 code=""
     while [ "$i" -lt 12 ]; do
+        code=""
         if command -v curl >/dev/null 2>&1; then
-            # 去掉 -f：4xx/5xx 也说明 nginx 在应答，算站点已生效。
-            curl -sS --noproxy '*' -o /dev/null "$url" 2>/dev/null && return 0
+            code="$(curl -sS --noproxy '*' -o /dev/null -w '%{http_code}' --max-time 5 "$url" 2>/dev/null)"
         elif command -v wget >/dev/null 2>&1; then
-            wget -q --no-proxy -O /dev/null "$url" 2>/dev/null && return 0
+            code="$(wget -q -S -O /dev/null --no-proxy "$url" 2>&1 | awk '/^  HTTP\//{c=$2} END{print c}')"
         fi
-        # 退化到纯 TCP 连通性（不依赖 curl/wget，也不受 HTTP 状态码影响）。
+        if [ -n "$code" ]; then
+            if [ "$code" = "200" ]; then
+                return 0
+            fi
+            # 拿到状态码却不是 200 —— 明确记原因，绝不误报「已就绪」。
+            case "$code" in
+                403) NGINX_FAIL_REASON="站点返回 403 Forbidden：nginx 能收到请求但读不到前端目录（多为 SELinux 拦读 /opt/llmbridge 下的静态文件，或目录权限不足）" ;;
+                502) NGINX_FAIL_REASON="站点返回 502：Nginx 在跑，但后端 127.0.0.1:8000 没起或没热" ;;
+                404) NGINX_FAIL_REASON="站点返回 404：前端产物目录缺少 index.html（构建可能未完成）" ;;
+                *)   NGINX_FAIL_REASON="站点返回 HTTP ${code}（非 200），控制台尚未真正可用" ;;
+            esac
+            return 1
+        fi
+        # 取不到状态码（curl/wget 都缺）→ 退化为纯 TCP 连通性兜底。
         if port_open "$NGINX_PORT"; then
             return 0
         fi
         sleep 1
         i=$((i + 1))
     done
+    if [ -z "$NGINX_FAIL_REASON" ]; then
+        NGINX_FAIL_REASON="端口 ${NGINX_PORT} 探活未通过（nginx 可能没起或未监听）"
+    fi
     return 1
 }
 

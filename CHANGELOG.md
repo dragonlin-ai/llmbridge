@@ -4,6 +4,15 @@
 
 ## [未发布]
 
+### 修掉控制台打开即 403：SELinux 漏标父目录 + 探活把 403 误当「已就绪」
+
+- **根因一（真 403）**：`nginx_fix_selinux` 原先只把 `…/admin-web/dist` 标 `httpd_sys_content_t`，漏了它的父目录 `admin-web` 与安装根 `/opt/llmbridge`。SELinux Enforcing 下，nginx 要读到 `dist/index.html` 必须能「穿过」`/opt/llmbridge → admin-web → dist` 每一层；父目录没标，traverse 被拦，直接 403 Forbidden（配置本身正确）。
+- **根因二（掩盖故障）**：上一轮的探活被改成「任意 HTTP 应答即算就绪」，于是 403 也被当成成功，摘要误报「控制台已就绪」，把真故障藏起来了。
+- **修法**：
+  ① `nginx_fix_selinux` 标的范围扩展到整条路径：`chcon -t … $INSTALL_DIR`（安装根可搜索）+ `chcon -R -t … $INSTALL_DIR/admin-web`（含 dist）；并补 `semanage fcontext` + `restorecon` 持久化（只覆盖前端路径与安装根，不碰后端/.venv/.env），避免系统 relabel 后失效；
+  ② `nginx_http_probe` 收紧为「根路径必须返回 HTTP 200 才算就绪」；非 200 时按状态码写入 `NGINX_FAIL_REASON`（403→指明 SELinux/权限拦读、502→后端未起、404→缺 index.html），不再把错误页当成功；
+  ③ 纯部署层，未动接口/表结构/判定口径。
+
 ### 修掉「一键安装」收尾没做完 Nginx：反引号误执行 + 探活误判 + RHEL SELinux 兜底
 
 - **根因一（确定性 bug）**：`print_summary` 的「启用控制台」提示里，在**未加引号**的 heredoc 中用反引号包着 `` `_` ``（指 nginx 的占位 server_name），bash 把它当成**命令替换**去执行 `_` 命令，安装末尾必报 `main: 行 N: _: 未找到命令`，并让那句话里的 server_name 丢失。
