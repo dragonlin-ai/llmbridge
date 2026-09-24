@@ -65,6 +65,9 @@ yarn-error.log*
 pnpm-debug.log*
 # TypeScript 增量编译缓存（vue-tsc -b 产出），每次构建都会变，不入库
 *.tsbuildinfo
+# vite 为加载 TS 配置写的临时文件（vite.config.ts.timestamp-<ms>-<hash>.mjs）。
+# 正常构建结束会自行删除；**构建被中断时残留**，属临时产物，不入库。
+*.timestamp-*.mjs
 
 # ---- IDE / 操作系统 ----
 .idea/
