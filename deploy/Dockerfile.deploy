@@ -1,0 +1,53 @@
+# 说明：与 deploy/Dockerfile 一样，刻意不写 `# syntax=docker/dockerfile:1` ——
+# 那行会让 buildx 去拉 docker/dockerfile 前端镜像，国内网络下可能连
+# auth.docker.io 都到不了，构建死在第一步。
+#
+# LLM 路由中转系统 · 安装器镜像（llmbridge-deploy）
+#
+# 它只干一件事：**把 deploy/docker-deploy.sh 打印到 stdout**。
+#
+# 于是目标机可以用一条命令从容器库取到安装脚本并直接执行：
+#
+#     docker run --rm registry.cn-hangzhou.aliyuncs.com/winyeahs/llmbridge-deploy:1.0.0 \
+#       | bash -s -- --image
+#
+# ⚠️ **前提：这个仓库在容器库里必须是「公开」的。** 阿里云 ACR 新建仓库默认**私有**，
+#    私有仓库的匿名令牌不带 pull 权限，目标机会报 401 而 `docker pull` 失败
+#    （本项目实测：llmbridge-api / llmbridge-web 可匿名拉取，llmbridge-deploy 建仓后
+#    默认不可 —— 需要在控制台「容器镜像服务 → 命名空间 → 仓库 → 修改」里设为公开）。
+#    不想动这个设置就用 api 镜像里那份同源脚本，命令见 deploy/Dockerfile 的注释：
+#      docker run --rm --entrypoint cat <api镜像> /opt/llmbridge/deploy/docker-deploy.sh \
+#        | bash -s -- --image
+#
+# 为什么要有这个镜像（而不是让用户去下载脚本）：
+#   1. GitHub 在国内基本不可达，raw.githubusercontent.com 更是超时 ——
+#      `curl .../docker-deploy.sh | bash` 这条路在国内目标机上是**必然失败**的。
+#      容器库反而是目标机唯一一定能访问的地址（否则镜像也拉不下来）。
+#   2. 不需要把脚本文件 scp / 微信 / U 盘 传到目标机。
+#   3. 安装脚本与被安装的镜像**同版本同标签**，不会出现「拿了新版脚本装旧版镜像」。
+#
+# 为什么不塞进 api 镜像：
+#   api 镜像约 350 MB，只为取一个几十 KB 的脚本要拉 350 MB 不划算；
+#   本镜像基于 alpine（复用其 busybox `cat`），**不装任何额外包**，约 8 MB。
+#   （api 镜像里也顺带放了一份同样的脚本作为兜底，见 deploy/Dockerfile。）
+#
+# 为什么 ENTRYPOINT 用 `sh -c "cat ..."` 而不是直接 `cat`：
+#   直接 `cat` 的话，`docker run --rm <image> --image` 会把 `--image` 当成文件名，
+#   cat 报 `unrecognized option`；包一层 sh 后多余参数被忽略。
+#
+# 用法（三种等价写法）：
+#   1) 直接管道安装（推荐）  docker run --rm <image> | bash -s -- --image
+#   2) 先落盘再执行           docker run --rm <image> > docker-deploy.sh && bash docker-deploy.sh --image
+#   3) 只看不装               docker run --rm <image> | less
+#
+# ⚠️ 本镜像**不含任何密钥**，也不执行任何部署动作 —— 它只是脚本的载体。
+#    真正的部署动作全部发生在目标机本地的 bash 里（用目标机的 docker compose）。
+
+FROM alpine:3.20
+
+COPY deploy/docker-deploy.sh        /opt/llmbridge/deploy/docker-deploy.sh
+# 编排文件一并放进镜像：脚本内部已内嵌一份等价内容，这里这份是给人看的真源，
+# 方便目标机上 `docker run --rm --entrypoint cat <image> /opt/llmbridge/deploy/docker-compose.image.yml` 核对。
+COPY deploy/docker-compose.image.yml /opt/llmbridge/deploy/docker-compose.image.yml
+
+ENTRYPOINT ["sh", "-c", "cat /opt/llmbridge/deploy/docker-deploy.sh"]

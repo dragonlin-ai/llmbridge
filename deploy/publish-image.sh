@@ -8,22 +8,41 @@
 #    # 1) 先登录容器库（密码由 docker 自己读取，不经过本脚本、不进任何文件）
 #    docker login --username=<你的账号> registry.cn-hangzhou.aliyuncs.com
 #
-#    # 2) 构建并推送 api + web 两个镜像
+#    # 2) 构建并推送 api + web + deploy 三个镜像
 #    bash deploy/publish-image.sh --tag 1.0.0
 #
-#    # 3) 目标机部署（只要容器库能访问，就不需要源码）
-#    bash deploy/docker-deploy.sh --image
+#    # 3) 目标机安装（一条命令，不需要源码、不需要 GitHub）
+#    docker run --rm --entrypoint cat registry.cn-hangzhou.aliyuncs.com/winyeahs/llmbridge-api:1.0.0 \
+#      /opt/llmbridge/deploy/docker-deploy.sh | bash -s -- --image
+#
+#  三个镜像各自负责什么：
+#    llmbridge-api     后端（FastAPI + 应用代码 + 运维脚本 + **部署脚本**）
+#    llmbridge-web     nginx + 已内置的前端 dist 与 nginx.conf
+#    llmbridge-deploy  **安装器**：不含业务代码，只有那一个部署脚本（约 8 MB）
+#
+#  目标机的安装脚本从哪来：
+#    api 镜像里带了 `<镜像>/opt/llmbridge/deploy/docker-deploy.sh`，目标机用
+#    `--entrypoint cat` 把它取出来管道给 bash 执行。因为安装流程随后要拉的就是
+#    这一套镜像，所以**不会多下载一个字节**。
+#    llmbridge-deploy 是「只要脚本」的轻量替代（8 MB vs 350 MB），但它需要在
+#    容器库里被设为**公开**；ACR 新建仓库默认私有，私有就必须先 docker login。
 #
 #  选项：
 #    --registry <host/ns>   容器库地址 + 命名空间
 #                           （默认 registry.cn-hangzhou.aliyuncs.com/winyeahs）
 #    --tag <tag>            版本标签（默认 1.0.0）
 #    --platform <list>      目标平台（默认 linux/amd64,linux/arm64）
-#    --only <api|web>       只出其中一个镜像（默认两个都出）
+#    --only <api|web|deploy>  只出其中一个镜像（默认三个都出）
 #    --load                 只构建到本机（仅单平台，不推送；用于本机验证）
 #    --no-immutable         不附带 git 短 sha 的不可变标签（默认附带）
 #    --dry-run              只打印将执行的命令，不真正构建
 #    -y, --yes              非交互，跳过推送前确认
+#
+#  环境变量：
+#    LLMBRIDGE_REGISTRY_MIRRORS  构建器的 docker.io 加速器（逗号分隔）
+#        默认 https://docker.1ms.run,https://docker.m.daocloud.io
+#        为什么需要：docker-container 驱动的 BuildKit **不读宿主机 daemon.json**，
+#        国内网络下不配它会死在拉基础镜像上（auth.docker.io Bad Gateway）。
 #
 #  账号密码怎么给（脚本一律不落盘）：
 #    已登录过    直接跑，脚本只做检测。
@@ -116,9 +135,14 @@ while [ $# -gt 0 ]; do
 done
 
 case "$ONLY" in
-    ""|api|web) ;;
-    *) die "--only 只接受 api 或 web，收到：$ONLY" ;;
+    ""|api|web|deploy) ;;
+    *) die "--only 只接受 api / web / deploy，收到：$ONLY" ;;
 esac
+
+# 三个镜像共用一套「要不要出这个镜像」的判据，避免各处重复写 --only 判断。
+want() {
+    [ -z "$ONLY" ] || [ "$ONLY" = "$1" ]
+}
 
 # 去掉可能被写进来的尾部斜杠，避免拼出 //（部分 registry 会因此 401）。
 REGISTRY="${REGISTRY%/}"
@@ -212,6 +236,7 @@ resolve_git_sha() {
 
 API_IMAGE="$REGISTRY/llmbridge-api"
 WEB_IMAGE="$REGISTRY/llmbridge-web"
+DEPLOY_IMAGE="$REGISTRY/llmbridge-deploy"
 
 IMMUTABLE_TAG=""
 if [ "$IMMUTABLE" = "true" ]; then
@@ -226,12 +251,13 @@ fi
 # 下面两段是给确认提示与结束提示复用的，避免在 heredoc 里塞命令替换
 # （命令替换的失败会污染退出码，也让 --dry-run 之外的输出难以预判）。
 BUILT_LIST=""
-if [ "$ONLY" != "web" ]; then BUILT_LIST="${API_IMAGE}:${TAG}"; fi
-if [ "$ONLY" != "api" ]; then BUILT_LIST="${BUILT_LIST}${BUILT_LIST:+ / }${WEB_IMAGE}:${TAG}"; fi
+if want api;    then BUILT_LIST="${API_IMAGE}:${TAG}"; fi
+if want web;    then BUILT_LIST="${BUILT_LIST}${BUILT_LIST:+ / }${WEB_IMAGE}:${TAG}"; fi
+if want deploy; then BUILT_LIST="${BUILT_LIST}${BUILT_LIST:+ / }${DEPLOY_IMAGE}:${TAG}"; fi
 
 IMMUTABLE_NOTE=""
 if [ -n "$IMMUTABLE_TAG" ]; then
-    IMMUTABLE_NOTE="  不可变标签  ${IMMUTABLE_TAG}（两个镜像均附加）"
+    IMMUTABLE_NOTE="  不可变标签  ${IMMUTABLE_TAG}（本次出包的每个镜像均附加）"
 fi
 
 # =============================================================================
@@ -240,15 +266,64 @@ fi
 
 BUILDER="llmbridge-builder"
 
+# -----------------------------------------------------------------------------
+#  docker-container 驱动的 BuildKit **不读宿主机的 daemon.json**，
+#  因此「宿主机能拉基础镜像」不代表构建器能拉。
+#  国内网络下这一步会死在拉基础镜像的元数据上，报：
+#      failed to authorize: ... auth.docker.io/token ... Bad Gateway
+#  给构建器显式写一份 buildkitd.toml 指定 docker.io 加速器即可（见 prepare_builder）。
+#  换加速器：LLMBRIDGE_REGISTRY_MIRRORS="https://a,https://b" bash deploy/publish-image.sh
+# -----------------------------------------------------------------------------
+BUILDER_CONFIG_DIR="${DOCKER_CONFIG:-$HOME/.docker}/buildx"
+BUILDER_CONFIG="$BUILDER_CONFIG_DIR/llmbridge-buildkitd.toml"
+REGISTRY_MIRRORS="${LLMBRIDGE_REGISTRY_MIRRORS:-https://docker.1ms.run,https://docker.m.daocloud.io}"
+
+builder_config_content() {
+    # 生成 buildkitd.toml。逗号分隔的加速器列表 → TOML 数组。
+    local mirrors="$1" m first="true"
+    printf '# 由 deploy/publish-image.sh 生成 —— 请勿手工编辑（会被覆盖）。\n'
+    printf '# 作用：给 docker-container 驱动的 BuildKit 指定 docker.io 加速器。\n'
+    printf '[registry."docker.io"]\n'
+    printf '  mirrors = ['
+    local IFS=','
+    for m in $mirrors; do
+        m="$(printf '%s' "$m" | tr -d ' \t')"
+        [ -n "$m" ] || continue
+        if [ "$first" = "true" ]; then first="false"; else printf ', '; fi
+        printf '"%s"' "$m"
+    done
+    printf ']\n'
+}
+
 prepare_builder() {
     if [ "$DRY_RUN" = "true" ]; then
         return 0
     fi
+
+    mkdir -p "$BUILDER_CONFIG_DIR"
+    local want have
+    want="$(builder_config_content "$REGISTRY_MIRRORS")"
+    have=""
+    if [ -f "$BUILDER_CONFIG" ]; then
+        have="$(cat "$BUILDER_CONFIG")"
+    fi
+    if [ "$want" != "$have" ]; then
+        printf '%s' "$want" > "$BUILDER_CONFIG"
+        info "写入构建器配置（docker.io 加速器）：$BUILDER_CONFIG"
+        # --config 只在 create 时生效，已存在必须重建才能应用。
+        # 丢掉的是构建缓存（不是数据），下一次构建会重新拉基础镜像。
+        if docker buildx inspect "$BUILDER" >/dev/null 2>&1; then
+            docker buildx rm "$BUILDER" >/dev/null 2>&1 || true
+            info "已重建构建器以应用加速器配置"
+        fi
+    fi
+
     if docker buildx inspect "$BUILDER" >/dev/null 2>&1; then
         docker buildx use "$BUILDER" >/dev/null
         info "复用构建器：$BUILDER"
     else
-        docker buildx create --name "$BUILDER" --use >/dev/null || die "创建 buildx 构建器失败。"
+        docker buildx create --name "$BUILDER" --use --config "$BUILDER_CONFIG" >/dev/null \
+            || die "创建 buildx 构建器失败（配置：$BUILDER_CONFIG）。"
         info "已创建构建器：$BUILDER"
     fi
     docker buildx inspect --bootstrap >/dev/null 2>&1 || true
@@ -322,13 +397,11 @@ show_digest() {
         return 0
     fi
     local img
-    for img in "$API_IMAGE" "$WEB_IMAGE"; do
-        if [ "$ONLY" = "api" ] && [ "$img" = "$WEB_IMAGE" ]; then
-            continue
-        fi
-        if [ "$ONLY" = "web" ] && [ "$img" = "$API_IMAGE" ]; then
-            continue
-        fi
+    local -a imgs=()
+    if want api;    then imgs+=("$API_IMAGE"); fi
+    if want web;    then imgs+=("$WEB_IMAGE"); fi
+    if want deploy; then imgs+=("$DEPLOY_IMAGE"); fi
+    for img in "${imgs[@]}"; do
         info "远端摘要 ${img}:${TAG}"
         docker buildx imagetools inspect "${img}:${TAG}" 2>/dev/null || \
             warn "读取 ${img}:${TAG} 摘要失败，可稍后手动确认。"
@@ -354,18 +427,30 @@ fi
 confirm
 prepare_builder
 
-if [ "$ONLY" != "web" ]; then
+if want api; then
     build_one "后端" "$API_IMAGE" "$REPO_ROOT/deploy/Dockerfile"
 fi
-if [ "$ONLY" != "api" ]; then
+if want web; then
     build_one "前端" "$WEB_IMAGE" "$REPO_ROOT/deploy/Dockerfile.web"
+fi
+if want deploy; then
+    # 安装器：只把部署脚本原样装进一个极小的 alpine 镜像。
+    # 它必须与 api/web **同标签发布**，否则目标机取到的新脚本会去装旧镜像。
+    build_one "安装器" "$DEPLOY_IMAGE" "$REPO_ROOT/deploy/Dockerfile.deploy"
 fi
 
 if [ "$USE_LOAD" = "true" ]; then
     ok "已构建到本机（未推送）：$BUILT_LIST"
     info "本机验证镜像内容（确认产物真在镜像里，而不是挂载进来的）："
-    info "  docker run --rm --entrypoint ls ${WEB_IMAGE}:${TAG} -l /usr/share/nginx/html"
-    info "  docker run --rm --entrypoint ls ${API_IMAGE}:${TAG} -l /app"
+    if want web; then
+        info "  docker run --rm --entrypoint ls ${WEB_IMAGE}:${TAG} -l /usr/share/nginx/html"
+    fi
+    if want api; then
+        info "  docker run --rm --entrypoint ls ${API_IMAGE}:${TAG} -l /app"
+    fi
+    if want deploy; then
+        info "  docker run --rm ${DEPLOY_IMAGE}:${TAG} | head -5     # 安装器应打印部署脚本"
+    fi
 else
     show_digest
     DONE_TITLE="推送完成"
@@ -378,10 +463,30 @@ ${C_GREEN}${C_BOLD}${DONE_TITLE}${C_OFF}
   镜像        $BUILT_LIST
 $IMMUTABLE_NOTE
 
-${C_BOLD}目标机部署（不需要源码）${C_OFF}
+${C_BOLD}目标机安装 —— 一条命令，不需要源码、不需要 GitHub${C_OFF}
+  docker run --rm --entrypoint cat ${API_IMAGE}:${TAG} \\
+    /opt/llmbridge/deploy/docker-deploy.sh | bash -s -- --image
+
+  # 换端口：       ... | bash -s -- --image --port 8080
+  # 换部署目录：   ... | bash -s -- --image --dir /srv/llmbridge
+  # 锁不可变版本： ... | bash -s -- --image --tag ${IMMUTABLE_TAG:-<tag>}
+
+  # 更轻的写法（约 8 MB 而不是整套后端）：先把容器库里的 llmbridge-deploy
+  # 仓库设为「公开」（阿里云控制台 → 容器镜像服务 → 命名空间 → 仓库 → 修改），
+  # 然后就可以直接用安装器镜像：
+  #   docker run --rm ${DEPLOY_IMAGE}:${TAG} | bash -s -- --image
+  # 仓库是私有时必须先在目标机 docker login，否则拉不到。
+
+${C_YELLOW}上面这条命令为什么能成立${C_OFF}
+  · 容器库是目标机唯一一定能访问的地址（否则业务镜像也拉不下来），
+    安装脚本因此随镜像交付；GitHub 在国内不可达，这条路本来走不通。
+  · 脚本放在 api 镜像里（约几十 KB），所以先取脚本、再拉同一套镜像，**不会多下载一个字节**。
+  · 镜像仓库必须是**公开**的，目标机才不用 docker login（api / web 已确认可匿名拉取）。
+    若改成私有，先在目标机 docker login，或给脚本传 REGISTRY_USER / REGISTRY_PASSWORD。
+  · --entrypoint cat 是必需的：api 镜像默认入口会先做数据库初始化再起服务。
+
+${C_BOLD}在仓库内（已有源码）${C_OFF}
   bash deploy/docker-deploy.sh --image --tag ${TAG}
-  # 或在 .env 里写 LLMBRIDGE_REGISTRY / LLMBRIDGE_TAG 后：
-  #   docker compose -f deploy/docker-compose.image.yml up -d
 
 ${C_YELLOW}生产建议${C_OFF}：用不可变标签或 digest 锁版本，别让浮动标签在半夜被覆盖。
 

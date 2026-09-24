@@ -288,7 +288,8 @@ print_access() {
 
 ${C_GREEN}${C_BOLD}已启动${C_OFF}
 
-  控制台   http://127.0.0.1:${HOST_PORT}/admin
+  控制台   http://127.0.0.1:${HOST_PORT}/
+           （控制台在根路径；/admin 是后端接口前缀，直接访问会 404）
   默认账号 admin / admin123  ${C_RED}（首次登录后立即修改）${C_OFF}
   数据目录 ${DATA_DIR}
   配置文件 ${ENV_FILE}

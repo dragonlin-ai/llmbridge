@@ -128,7 +128,7 @@ Four options — pick the one that matches your environment:
 | **1 · Script install** (recommended) | Production on a Linux server | Linux + Python 3.11+ (Node.js 20+ optional) | one `curl` |
 | **2 · Docker Compose** (recommended) | Production anywhere, minimal host setup | Docker + Compose v2 | one `curl` |
 | └ Form A · build from source | You have the repo on the target host and will change code | same as above | `up -d --build` |
-| └ Form B · image from a registry | **No source code on the target host** — the hand-off-friendly form | same as above, plus registry access | `--image` |
+| └ Form B · image from a registry | **No source code on the target host** — the hand-off-friendly form | same as above, plus registry access | one `docker run` |
 | **3 · Apple container** | Local development / trial on Apple Silicon | macOS 26+ and `container` 1.1.0+ | three subcommands |
 | **4 · Build from source** | Customization, offline delivery | Python 3.11+ / Node.js 20+ | see below |
 
@@ -255,6 +255,10 @@ The script downloads the source into `./llmbridge`, generates `.env` with random
 `node:22-alpine` container, runs `docker compose up -d --build`, polls `/health` until ready,
 and prints the access URL.
 
+> ⚠️ This one needs `github.com` to be reachable. **From mainland China, skip to
+> "Form B · image from a registry" below** — that path makes no GitHub request at all:
+> just one `docker run`, with both the script and the images coming from the registry.
+
 Options and subcommands:
 
 ```bash
@@ -287,8 +291,17 @@ cp .env.example .env
 cd admin-web && npm ci && npm run build && cd ..
 
 # 4) Bring up the stack
-docker compose -f deploy/docker-compose.yml up -d --build
+docker compose --env-file ./.env -f deploy/docker-compose.yml up -d --build
 ```
+
+> ⚠️ **`--env-file ./.env` is not optional.** As soon as `-f` points at the `deploy/`
+> subdirectory, Compose looks for `.env` **in the directory holding the compose file**
+> (`deploy/.env`) when performing **variable interpolation** — the repo-root `.env` is
+> invisible to it, and you get
+> `required variable POSTGRES_PASSWORD is missing a value`.
+> Note that `env_file: ../.env` inside `docker-compose.yml` only sets the **container's**
+> environment; it does not affect Compose's own interpolation.
+> **Every `docker compose -f deploy/...` command below is the same.**
 
 Generating secrets:
 
@@ -308,7 +321,7 @@ PostgreSQL and Redis data live in Docker **named volumes** (`llmbridge_pgdata` /
 
 ```bash
 # Source server
-docker compose -f deploy/docker-compose.yml stop
+docker compose --env-file ./.env -f deploy/docker-compose.yml stop
 docker run --rm -v llmbridge_pgdata:/data -v "$PWD":/backup alpine \
   tar czf /backup/pgdata.tar.gz -C /data .
 
@@ -331,7 +344,7 @@ Open `http://<server-ip>:<HTTP_PORT>/` (`HTTP_PORT` defaults to 80) and log in w
 ```bash
 git pull
 cd admin-web && npm ci && npm run build && cd ..
-docker compose -f deploy/docker-compose.yml up -d --build
+docker compose --env-file ./.env -f deploy/docker-compose.yml up -d --build
 ```
 
 > `--build` is required: the frontend `dist/` is bind-mounted into nginx, so
@@ -340,11 +353,11 @@ docker compose -f deploy/docker-compose.yml up -d --build
 #### Useful commands
 
 ```bash
-docker compose -f deploy/docker-compose.yml ps               # status
-docker compose -f deploy/docker-compose.yml logs -f api      # backend logs
-docker compose -f deploy/docker-compose.yml restart api      # restart backend
-docker compose -f deploy/docker-compose.yml down             # stop (volumes preserved)
-docker compose -f deploy/docker-compose.yml down -v          # stop and delete data (dangerous)
+docker compose --env-file ./.env -f deploy/docker-compose.yml ps               # status
+docker compose --env-file ./.env -f deploy/docker-compose.yml logs -f api      # backend logs
+docker compose --env-file ./.env -f deploy/docker-compose.yml restart api      # restart backend
+docker compose --env-file ./.env -f deploy/docker-compose.yml down             # stop (volumes preserved)
+docker compose --env-file ./.env -f deploy/docker-compose.yml down -v          # stop and delete data (dangerous)
 ```
 
 ---
@@ -360,11 +373,19 @@ whole system:
 
 | Image | Contents |
 |---|---|
-| `llmbridge-api` | Backend (FastAPI + routing engine + migration scripts) |
+| `llmbridge-api` | Backend (FastAPI + routing engine + migration scripts) + **the install script** (`/opt/llmbridge/deploy/`) |
 | `llmbridge-web` | nginx + the built frontend `dist` and `nginx.conf` baked in |
+| `llmbridge-deploy` | **Installer** (optional): no application code, just that one install script (~8 MB) |
 
-The target host needs **one compose file and one `.env`** — no source, no Node.js,
-nothing built locally.
+The target host needs **one address and one command** — no source, no Node.js,
+nothing built locally, and no download from GitHub.
+
+> **Why the install script travels inside an image**: the script itself has to reach the
+> target host first, and `raw.githubusercontent.com` is unreachable from mainland China —
+> `curl ... | bash` simply cannot work there. The registry is the one address a target host
+> is guaranteed to reach (it has to pull the application images from it anyway), so the
+> script ships inside the api image; and since the install then pulls that very same image,
+> **fetching the script costs no extra bytes**.
 
 ##### 1) Publish the images (publisher side, once)
 
@@ -372,7 +393,7 @@ nothing built locally.
 # Log in to the registry (docker reads the password itself; no script and no file sees it)
 docker login --username=<your-account> registry.cn-hangzhou.aliyuncs.com
 
-# Build and push api + web (defaults to linux/amd64,linux/arm64)
+# Build and push api + web + deploy (defaults to linux/amd64,linux/arm64)
 bash deploy/publish-image.sh --tag 1.0.0
 
 # x86-only fleets: pin a single platform (cross-arch builds run under QEMU and are slower)
@@ -396,34 +417,95 @@ bash deploy/publish-image.sh --registry registry.cn-hangzhou.aliyuncs.com/<your-
 > credential in a repository is a public credential. For CI, pass `REGISTRY_USER` /
 > `REGISTRY_PASSWORD` as environment variables (the script feeds them to
 > `docker login --password-stdin`), or use a short-lived registry token.
+>
+> ⚠️ The `docker-container` BuildKit driver does **not** read the host's `daemon.json`,
+> so a host that can `docker pull python:3.13-slim` is not automatically able to build.
+> Behind a restricted network, builds die fetching base-image metadata
+> (`auth.docker.io ... Bad Gateway`). The script writes
+> `~/.docker/buildx/llmbridge-buildkitd.toml` with `docker.io` mirrors for the builder
+> and recreates it when the config changes. Override with
+> `LLMBRIDGE_REGISTRY_MIRRORS="https://a,https://b" bash deploy/publish-image.sh`.
 
-##### 2) Deploy (target host, Docker only)
+##### 2) Install (target host, Docker only — one command)
 
 ```bash
-# From inside the repo
+docker run --rm --entrypoint cat \
+  registry.cn-hangzhou.aliyuncs.com/winyeahs/llmbridge-api:1.0.0 \
+  /opt/llmbridge/deploy/docker-deploy.sh | bash -s -- --image
+```
+
+That is all. It writes the compose file, generates `.env` (random `JWT_SECRET` /
+`ENCRYPTION_MASTER_KEY` / `POSTGRES_PASSWORD`), runs `compose pull`, then `compose up -d`,
+polls `/health` until ready, and prints the console URL and default account.
+
+> `--entrypoint cat` is required: the api image's default entrypoint initializes the
+> database before starting the server. The script is piped into the **target host's own
+> bash** — the container performs no deployment action.
+
+Variants and day-2 operations (record the pipe once, reuse it for every subcommand):
+
+```bash
+LB='docker run --rm --entrypoint cat registry.cn-hangzhou.aliyuncs.com/winyeahs/llmbridge-api:1.0.0 /opt/llmbridge/deploy/docker-deploy.sh'
+
+$LB | bash -s -- --image               # install (port 80, deploy dir ./llmbridge)
+$LB | bash -s -- --image --port 8080   # different console port
+$LB | bash -s -- --image --dir /srv/llmbridge
+$LB | bash -s -- --image --tag 1.0.0-<git-short-sha>
+
+$LB | bash -s -- status                # status + health check (image already local, offline)
+$LB | bash -s -- logs api
+$LB | bash -s -- down
+```
+
+Run subcommands from the same directory (the default deploy directory is `./llmbridge`),
+exactly like `docker compose`. To read the script without running it: `$LB > docker-deploy.sh`.
+
+**Lighter option** (optional): a separate ~8 MB installer image, `llmbridge-deploy`, prints
+the same script. It requires **that repository to be public** in the registry — a fresh
+Aliyun ACR repository is private by default, whose anonymous token carries no pull
+permission (401). After switching it public (console → Container Registry → namespace →
+repository → edit):
+
+```bash
+docker run --rm registry.cn-hangzhou.aliyuncs.com/winyeahs/llmbridge-deploy:1.0.0 \
+  | bash -s -- --image
+```
+
+(If you would rather not touch that setting, ignore it — the api-image command above is
+the same script.)
+
+Private registry: pass `REGISTRY_USER` / `REGISTRY_PASSWORD` and the script logs in
+automatically before pulling (`--password-stdin`, nothing written to disk):
+
+```bash
+REGISTRY_USER=<account> REGISTRY_PASSWORD=<password> bash docker-deploy.sh --image
+```
+
+From inside the source repo (for your own ops team):
+
+```bash
 bash deploy/docker-deploy.sh --image --tag 1.0.0
-
-# Or with no source at all — the script fetches the compose file itself
-curl -sSL https://raw.githubusercontent.com/dragonlin-ai/llmbridge/main/deploy/docker-deploy.sh \
-  | bash -s -- --image --tag 1.0.0
 ```
 
-The script fetches `docker-compose.image.yml`, generates `.env` (random secrets), runs
-`compose pull`, then `compose up -d`, then polls `/health`. The deploy directory ends up
-holding just two things: the compose file and `.env`.
+The deploy directory ends up holding just two things: the compose file and `.env`
+(the compose file is embedded in the script, so nothing is downloaded).
 
-Manual equivalent:
+Manual equivalent (run from the root of the deploy directory):
 
 ```bash
-docker compose -f deploy/docker-compose.image.yml pull
-docker compose -f deploy/docker-compose.image.yml up -d
+docker compose --env-file ./.env -f deploy/docker-compose.image.yml pull
+docker compose --env-file ./.env -f deploy/docker-compose.image.yml up -d
 ```
+
+> `--env-file ./.env` is required here too: `.env` sits at the deploy-directory root while
+> the compose file lives in `deploy/`, so Compose would otherwise look for `deploy/.env`.
+> (The install script passes the flag itself, so the one-command path is unaffected.)
 
 Upgrade and roll back (data volumes are untouched):
 
 ```bash
-docker compose -f deploy/docker-compose.image.yml pull
-docker compose -f deploy/docker-compose.image.yml up -d      # move to the tag in .env
+docker compose --env-file ./.env -f deploy/docker-compose.image.yml pull
+docker compose --env-file ./.env -f deploy/docker-compose.image.yml up -d      # move to the tag in .env
 
 # Roll back: set LLMBRIDGE_TAG in .env back to the previous tag, rerun the two lines above
 ```
@@ -435,8 +517,8 @@ volumes** (`llmbridge_pgdata` / `llmbridge_redisdata`) — switching forms does 
 But the service names differ (Form A has `nginx`, Form B has `web`), so stop first:
 
 ```bash
-docker compose -f deploy/docker-compose.yml down       # before switching A → B
-docker compose -f deploy/docker-compose.image.yml up -d
+docker compose --env-file ./.env -f deploy/docker-compose.yml down       # before switching A → B
+docker compose --env-file ./.env -f deploy/docker-compose.image.yml up -d
 ```
 
 An `orphan containers` warning during the next up usually means this step was skipped.
@@ -654,6 +736,9 @@ python scripts/seed_provider_catalog.py --dry-run   # same as above (thin shell 
 python scripts/migrate_sqlite_to_pg.py              # migrate SQLite data to PostgreSQL
 python scripts/migrate_add_provider_channels.py     # add channel fields to legacy databases
 python scripts/build_release.py                     # build an offline release package
+python scripts/verify_registry.py --tag 1.0.0        # confirm the tag really exists (not the push exit code)
+python scripts/verify_deploy.py --port 8099          # post-install **functional** check (console/login/db/bootstrap)
+python scripts/check_compose_sync.py                 # verify the embedded compose copy matches its source
 ```
 
 ---
@@ -724,14 +809,15 @@ llmbridge/
 │   ├── core/                 Config, crypto, security, event loop
 │   └── cli.py                Command-line entrypoints
 ├── admin-web/                Console frontend (Vue 3 + Vite + Element Plus)
-├── scripts/                  Idempotent ops scripts (catalog / migrations / release build)
+├── scripts/                  Idempotent ops scripts (catalog / migrations / release build / delivery checks)
 ├── deploy/                   Deployment assets
 │   ├── install.sh            ★ Option 1: Linux one-shot install (systemd)
 │   ├── docker-deploy.sh      ★ Option 2: Docker Compose one-shot deploy (Form A / `--image` Form B)
-│   ├── publish-image.sh      ★ Publisher side of Form B: build and push the api + web images
+│   ├── publish-image.sh      ★ Publisher side of Form B: build and push the api + web + deploy images
 │   ├── apple-container.sh    ★ Option 3: macOS Apple container
 │   ├── Dockerfile            Backend image
 │   ├── Dockerfile.web        Frontend image (nginx + dist and nginx.conf baked in)
+│   ├── Dockerfile.deploy     Installer image (prints docker-deploy.sh only, ~8 MB)
 │   ├── docker-compose.yml    Orchestration (api / db / redis / nginx) · Form A, builds locally
 │   ├── docker-compose.image.yml  Orchestration (api / db / redis / web) · Form B, no build stage
 │   ├── nginx.conf            Reverse proxy for the Compose form (SSE-critical; baked into the web image)

@@ -3,12 +3,23 @@
 # 与 deploy/docker-compose.yml 的区别，只有一句话：
 #   **这份文件不含任何 `build:` 段，全部镜像从容器库拉取，目标机不需要源码。**
 #
-# 用法（在仓库根目录执行；用 docker-deploy.sh --image 会自动生成 .env）：
-#   cp .env.example .env          # 改 JWT_SECRET / ENCRYPTION_MASTER_KEY / POSTGRES_PASSWORD
-#   # 可选：在 .env 里追加（不填就用下面 ${VAR:-默认} 的值）
-#   #   LLMBRIDGE_REGISTRY=registry.cn-hangzhou.aliyuncs.com/winyeahs
-#   #   LLMBRIDGE_TAG=1.0.0
-#   docker compose -f deploy/docker-compose.image.yml up -d
+# 目标机推荐用法（一条命令，脚本会自动生成 .env 并探活）：
+#   docker run --rm --entrypoint cat \
+#     registry.cn-hangzhou.aliyuncs.com/winyeahs/llmbridge-api:1.0.0 \
+#     /opt/llmbridge/deploy/docker-deploy.sh | bash -s -- --image
+#   # 需要换端口：   ... | bash -s -- --image --port 8080
+#   # 已有源码仓库： bash deploy/docker-deploy.sh --image
+#
+# 本文件是**唯一真源**：可读、可 diff、也可单独使用 ——
+#   docker compose --env-file ./.env -f deploy/docker-compose.image.yml up -d
+#   ⚠️ `--env-file ./.env` 不能省：compose 的**变量插值**只读「编排文件所在目录」的
+#      `.env`（即 deploy/.env），必须显式指到根下那一份，否则报
+#      `required variable POSTGRES_PASSWORD is missing a value`。
+#
+# ⚠️ docker-deploy.sh 里**内嵌了一份等价内容**，供「手上只有那一个脚本文件」的
+#    目标机离线使用（国内网络下 raw.githubusercontent.com 不可达，原来那条
+#    下载编排的路径在目标机上必然失败）。改动本文件必须同步内嵌副本 ——
+#    在仓库内执行 `bash deploy/docker-deploy.sh --image` 时会自动比对并告警。
 #
 # 只有 4 个服务，没有源码目录、没有 bind mount、没有前端构建步骤：
 #   api  ← llmbridge-api:<tag>   后端
@@ -16,6 +27,9 @@
 #   db   ← postgres:16-alpine
 #   redis← redis:7-alpine
 #
+# ⚠️ 镜像仓库必须是**公开**的，目标机才不用 docker login（公开库匿名可拉）。
+#    私有库请在目标机先 `docker login <host>`，或给脚本传 REGISTRY_USER /
+#    REGISTRY_PASSWORD 环境变量（脚本会在 pull 前自动登录，凭据只经环境变量、不落盘）。
 # ⚠️ 升级前先确认目标 tag 存在：`docker manifest inspect <image>`
 # ⚠️ 与 docker-compose.yml 共用 project name，因此**共用同一套数据卷**；
 #    两种形态互相切换时先 `down` 再 `up`，否则会留下上一种形态的孤儿容器。

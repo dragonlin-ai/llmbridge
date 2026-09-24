@@ -5,15 +5,33 @@
 # =============================================================================
 #
 #  用法：
-#    # 远程（自动下载源码到 ./llmbridge 并起容器）
-#    curl -sSL https://raw.githubusercontent.com/dragonlin-ai/llmbridge/main/deploy/docker-deploy.sh | bash
+#    # 容器库形态（**目标机不需要任何源码**）—— 交付给客户时只要这一句：
+#    docker run --rm --entrypoint cat \
+#      registry.cn-hangzhou.aliyuncs.com/winyeahs/llmbridge-api:1.0.0 \
+#      /opt/llmbridge/deploy/docker-deploy.sh | bash -s -- --image
 #
 #    # 仓库内（用当前源码）
 #    bash deploy/docker-deploy.sh
 #
-#    # 容器库形态（**不需要源码**，全部镜像从容器库拉取）
+#    # 仓库内（容器库形态：不下载源码、不构建前端，全部镜像从容器库拉取）
 #    bash deploy/docker-deploy.sh --image
-#    curl -sSL .../deploy/docker-deploy.sh | bash -s -- --image
+#
+#  目标机最低要求（容器库形态）：
+#    1) 装了 Docker（含 compose v2）；2) 能访问容器库。
+#    就这两样 —— 不需要源码、不需要 Node、不需要 .env 模板、不需要登录容器库
+#    （镜像仓库是公开的，匿名可拉）、除容器库外不访问任何外网（编排文件内嵌在本脚本里）。
+#    脚本会自动生成含随机密钥的 .env、拉镜像、起容器、等健康检查、打印访问地址与账号。
+#
+#  为什么安装脚本要从容器库的镜像里取：
+#    脚本本身也得先送到目标机，而 GitHub（raw.githubusercontent.com）在国内不可达 ——
+#    `curl ... | bash` 在目标机上是**必然失败**的；容器库反而是目标机唯一一定能访问的
+#    地址（否则业务镜像也拉不下来）。api 镜像里放了本脚本的一份
+#    （/opt/llmbridge/deploy/docker-deploy.sh），而安装流程随后要拉的就是这套镜像，
+#    所以取脚本这一步**不会多下载一个字节**。
+#    ⚠️ `--entrypoint cat` 不能省：api 镜像默认入口会先做数据库初始化再起服务。
+#    另有 8 MB 的纯安装器镜像 <registry>/llmbridge-deploy（更轻，但要求该仓库在容器库
+#    里被设为公开，否则匿名拉取 401），以及 `bash deploy/docker-deploy.sh`（自家运维在
+#    源码仓库里用）—— 三者跑的是同一个脚本、同一套编排，结果一致。
 #
 #  子命令：
 #    (无) / deploy   准备配置 + 构建前端 + 启动全部服务
@@ -29,11 +47,18 @@
 #    --port <n>         控制台对外端口（默认 80）
 #    --pg-password <p>  PostgreSQL 密码（默认随机 32 位）
 #    --skip-frontend    跳过前端构建（仅在你已有 admin-web/dist 时使用）
-#    --image            容器库形态：不下载源码、不构建前端，只取编排文件 +
-#                       生成 .env + 拉取镜像。需先发布镜像，见 publish-image.sh
-#    --registry <host/ns>  容器库地址与命名空间（配合 --image）
+#    --image            容器库形态：不下载源码、不构建前端。编排文件已内嵌在本脚本里，
+#                       因此**不需要联网下载任何文件**（除容器库本身）：写编排 → 生成 .env
+#                       → 拉镜像 → 起容器 → 探活。镜像需先发布，见 publish-image.sh
+#    --registry <host/ns>  容器库地址与命名空间（配合 --image，默认阿里云 ACR）
 #    --tag <tag>           镜像版本标签（配合 --image，默认 1.0.0）
 #    -y, --yes          非交互
+#
+#  环境变量：
+#    LLMBRIDGE_REGISTRY / LLMBRIDGE_TAG   同 --registry / --tag（--image 形态）
+#    REGISTRY_USER / REGISTRY_PASSWORD    私有容器库的凭据：设了就在 pull 前自动
+#                                         docker login（--password-stdin）。凭据只经环境变量，
+#                                         不写进 .env、不落盘、不进日志。
 #
 #  两种形态的区别（别混用）：
 #    源码形态（默认）  镜像在本机构建；前端 dist 是 bind mount 进 nginx 的，
@@ -51,6 +76,14 @@
 #    （--image 形态没有这个坑：dist 已经在镜像里。）
 # =============================================================================
 
+# 本脚本用到数组与 $'...'，必须是 bash。被 sh/dash 执行时 `set -o pipefail` 会先报
+# "Illegal option"，那句报错离真实原因很远，所以在这里先给一句人话。
+if [ -z "${BASH_VERSION:-}" ]; then
+    echo "[失败] 本脚本需要 bash 执行（用到数组），不能用 sh/dash。" >&2
+    echo "       请用：bash docker-deploy.sh --image" >&2
+    exit 1
+fi
+
 set -euo pipefail
 
 REPO_SLUG="dragonlin-ai/llmbridge"
@@ -60,6 +93,7 @@ NODE_IMAGE="node:22-alpine"
 DEPLOY_DIR="./llmbridge"
 REF="$DEFAULT_REF"
 HTTP_PORT="80"
+PORT_GIVEN="false"
 PG_PASSWORD=""
 SKIP_FRONTEND="false"
 ASSUME_YES="false"
@@ -85,9 +119,12 @@ step() { printf '\n%s==> %s%s\n' "$C_BOLD" "$*" "$C_OFF"; }
 usage() {
     # 打印文件头部的注释块。用 shell 内建而非 awk —— 有些环境确实没有 awk
     # （本项目的开发机 Git Bash 就是，awk/head/wc 全缺），那样 `--help` 会是空白。
-    # 管道执行（curl | bash）时 $0 不是路径、读不到脚本自身，退化为一行提示。
+    # `docker run ... | bash -s -- --help` 这种管道执行时 $0 不是路径、读不到脚本自身，
+    # 于是退化为提示 —— 想把完整用法打出来，先把脚本落盘（见下面的提示命令）。
     if [ ! -f "$0" ]; then
-        echo "llmbridge Docker Compose 一键部署脚本。完整用法见 README.md 或仓库内 deploy/docker-deploy.sh 头部注释。"
+        echo "llmbridge Docker Compose 一键部署脚本。"
+        printf '完整用法：docker run --rm %s/llmbridge-deploy:%s > docker-deploy.sh && bash docker-deploy.sh --help\n' \
+            "$REGISTRY" "$IMAGE_TAG"
         exit 0
     fi
     local lineno=0 line
@@ -101,6 +138,22 @@ usage() {
         esac
     done < "$0"
     exit 0
+}
+
+# 把「怎么再次调用本脚本」算成一个字符串，供文案里复用。
+#   在磁盘上跑（仓库内 / 手工落盘）→ `bash <路径> <子命令>`
+#   管道里跑（docker run ... | bash -s --）→ 用同一条 docker run 管道再调一次
+#     （安装器镜像这时已经在本机了，不需要联网）
+# 不这样区分的话，管道形态下会打出 `bash bash logs` 这种没法照做的提示。
+self_cmd() {
+    if [ -f "$0" ]; then
+        printf 'bash %s' "$0"
+    else
+        # 管道形态：用「同一条 docker run 管道」再调一次（api 镜像这时已在本机，不必联网）。
+        # 与脚本头部推荐的那一条保持一致（安装脚本的载体是 api 镜像，见头部说明）。
+        printf 'docker run --rm --entrypoint cat %s/llmbridge-api:%s /opt/llmbridge/deploy/docker-deploy.sh | bash -s --' \
+            "$REGISTRY" "$IMAGE_TAG"
+    fi
 }
 
 # ---- 子命令（第一个位置参数）----
@@ -124,7 +177,7 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --dir)          DEPLOY_DIR="${2:?--dir 需要参数}"; shift 2 ;;
         --ref)          REF="${2:?--ref 需要参数}"; shift 2 ;;
-        --port)         HTTP_PORT="${2:?--port 需要参数}"; shift 2 ;;
+        --port)         HTTP_PORT="${2:?--port 需要参数}"; PORT_GIVEN="true"; shift 2 ;;
         --pg-password)  PG_PASSWORD="${2:?--pg-password 需要参数}"; shift 2 ;;
         --image)        USE_IMAGE="true"; shift ;;
         --registry)     REGISTRY="${2:?--registry 需要参数}"; shift 2 ;;
@@ -140,6 +193,8 @@ REGISTRY="${REGISTRY%/}"
 # 环境变量也能覆盖，方便 CI 里统一配置。
 REGISTRY="${LLMBRIDGE_REGISTRY:-$REGISTRY}"
 IMAGE_TAG="${LLMBRIDGE_TAG:-$IMAGE_TAG}"
+# registry 主机名 = 第一段，用于登录检测（`registry.cn-hangzhou.aliyuncs.com/winyeahs` → 前半段）。
+REGISTRY_HOST="${REGISTRY%%/*}"
 
 if [ "$USE_IMAGE" = "true" ]; then
     COMPOSE_FILE="deploy/docker-compose.image.yml"
@@ -148,6 +203,19 @@ if [ "$USE_IMAGE" = "true" ]; then
         warn "--image 形态不需要 --skip-frontend（镜像里已含前端），该选项被忽略。"
         SKIP_FRONTEND="false"
     fi
+fi
+
+# ---- 形态自检：运维子命令不必每次手写 --image ----
+# 部署目录里**只有** docker-compose.image.yml（没有源码形态的 docker-compose.yml）时，
+# 自动按容器库形态处理。理由：`status` / `logs` / `down` / `upgrade` 这些子命令一旦漏了
+# --image，脚本会去源码形态找 pyproject.toml，报出「未找到部署目录」—— 而目录明明在，
+# 真实原因只是漏了一个开关。实测踩到过（管道形态下尤其容易漏）。
+if [ "$USE_IMAGE" != "true" ] \
+   && [ ! -f "$DEPLOY_DIR/deploy/docker-compose.yml" ] \
+   && [ -f "$DEPLOY_DIR/deploy/docker-compose.image.yml" ]; then
+    USE_IMAGE="true"
+    COMPOSE_FILE="deploy/docker-compose.image.yml"
+    info "检测到 $DEPLOY_DIR 是容器库形态部署（无源码编排），自动按 --image 处理。"
 fi
 
 # =============================================================================
@@ -170,6 +238,36 @@ check_docker() {
     fi
     info "容器运行时：$(docker --version)"
     info "编排工具：$DC（$($DC version --short 2>/dev/null || echo '版本未知')）"
+}
+
+registry_logged_in() {
+    local cfg="${DOCKER_CONFIG:-$HOME/.docker}/config.json"
+    [ -f "$cfg" ] || return 1
+    # 不用 grep —— 最小化环境里可能没有（见脚本头说明）。纯 shell 匹配即可。
+    case "$(cat "$cfg")" in
+        *"$REGISTRY_HOST"*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+ensure_registry_login() {
+    # 只在容器库形态下需要。公开库什么都不用做；私有库靠环境变量里的凭据登录。
+    # 凭据**只经环境变量**，不写进 .env、不落盘、不进日志。
+    [ "$USE_IMAGE" = "true" ] || return 0
+    if [ -z "${REGISTRY_USER:-}" ] || [ -z "${REGISTRY_PASSWORD:-}" ]; then
+        # 没给凭据就交给 docker 自己：公开库能直接拉；私有库会在 pull 时以 401 报错，
+        # 那时下面的提示会告诉用户怎么办（比起静默失败，不如让 docker 的原生报错出现）。
+        return 0
+    fi
+    if registry_logged_in; then
+        info "检测到已登录 $REGISTRY_HOST"
+        return 0
+    fi
+    info "使用环境变量中的凭据登录 $REGISTRY_HOST（用户名：$REGISTRY_USER）"
+    printf '%s' "$REGISTRY_PASSWORD" | docker login "$REGISTRY_HOST" \
+        --username "$REGISTRY_USER" --password-stdin >/dev/null \
+        || die "登录 $REGISTRY_HOST 失败。请核对 REGISTRY_USER / REGISTRY_PASSWORD，或先手动 docker login。"
+    ok "已登录 $REGISTRY_HOST"
 }
 
 # =============================================================================
@@ -224,7 +322,7 @@ resolve_source() {
     fi
 
     [ "$allow_fetch" = "true" ] || \
-        die "未找到部署目录（$DEPLOY_DIR）。请先执行部署：bash $0"
+        die "未找到部署目录（$DEPLOY_DIR）。请先执行部署：$(self_cmd)"
 
     local url tmp
     mkdir -p "$DEPLOY_DIR"
@@ -249,19 +347,168 @@ resolve_source() {
 }
 
 # -----------------------------------------------------------------------------
-#  容器库形态：不下载源码，只取一个编排文件
+#  容器库形态：只落一个编排文件 + 一个 .env，**不联网下载任何东西**
 # -----------------------------------------------------------------------------
 #
 # 为什么只要一个文件：api 与 web 两个镜像里已经装好了后端代码、前端 dist 与
 # nginx.conf，目标机剩下的可变部分只有「编排文件 + .env」。
-# 编排文件里 env_file 写的是 ../.env，与下载位置（<部署目录>/deploy/）配套，
-# 所以这个相对路径不需要额外调整。
+# 编排文件里 env_file 写的是 ../.env，与放置位置（<部署目录>/deploy/）配套。
+#
+# 为什么编排改为**内嵌**进本脚本（原来是 curl 下载 raw.githubusercontent.com）：
+#   国内网络下 raw.githubusercontent.com 基本不可达 —— 那条下载路径在目标机上
+#   必然超时失败；而这个脚本本身也只能靠 scp/微信/U 盘进目标机（GitHub 同样拉不动）。
+#   内嵌之后目标机只需要这一个文件：`bash docker-deploy.sh --image` 全程除容器库
+#   外不访问任何外网。
+#
+# ⚠️ 内嵌副本与 deploy/docker-compose.image.yml 内容等价，是「两份」。改其一
+#    必须同步另一；在仓库内执行时会自动比对，不一致就告警（见 resolve_image_source）。
+
+IMAGE_COMPOSE_REL="deploy/docker-compose.image.yml"
+
+write_image_compose() {
+    # 内嵌副本写到 $1。分隔符带引号 → 内容里的 ${...} 一律不展开。
+    local dest="$1"
+    mkdir -p "${dest%/*}"
+    cat > "$dest" <<'LLMBRIDGE_COMPOSE_EOF'
+# LLM 路由中转系统 · Docker Compose 编排（容器库拉取形态）
+#
+# 与 deploy/docker-compose.yml 的区别，只有一句话：
+#   **这份文件不含任何 `build:` 段，全部镜像从容器库拉取，目标机不需要源码。**
+#
+# 目标机推荐用法（一条命令，脚本会自动生成 .env 并探活）：
+#   docker run --rm --entrypoint cat \
+#     registry.cn-hangzhou.aliyuncs.com/winyeahs/llmbridge-api:1.0.0 \
+#     /opt/llmbridge/deploy/docker-deploy.sh | bash -s -- --image
+#   # 需要换端口：   ... | bash -s -- --image --port 8080
+#   # 已有源码仓库： bash deploy/docker-deploy.sh --image
+#
+# 本文件是**唯一真源**：可读、可 diff、也可单独使用 ——
+#   docker compose --env-file ./.env -f deploy/docker-compose.image.yml up -d
+#   ⚠️ `--env-file ./.env` 不能省：compose 的**变量插值**只读「编排文件所在目录」的
+#      `.env`（即 deploy/.env），必须显式指到根下那一份，否则报
+#      `required variable POSTGRES_PASSWORD is missing a value`。
+#
+# ⚠️ docker-deploy.sh 里**内嵌了一份等价内容**，供「手上只有那一个脚本文件」的
+#    目标机离线使用（国内网络下 raw.githubusercontent.com 不可达，原来那条
+#    下载编排的路径在目标机上必然失败）。改动本文件必须同步内嵌副本 ——
+#    在仓库内执行 `bash deploy/docker-deploy.sh --image` 时会自动比对并告警。
+#
+# 只有 4 个服务，没有源码目录、没有 bind mount、没有前端构建步骤：
+#   api  ← llmbridge-api:<tag>   后端
+#   web  ← llmbridge-web:<tag>   nginx + 已内置的 dist 与 nginx.conf
+#   db   ← postgres:16-alpine
+#   redis← redis:7-alpine
+#
+# ⚠️ 镜像仓库必须是**公开**的，目标机才不用 docker login（公开库匿名可拉）。
+#    私有库请在目标机先 `docker login <host>`，或给脚本传 REGISTRY_USER /
+#    REGISTRY_PASSWORD 环境变量（脚本会在 pull 前自动登录，凭据只经环境变量、不落盘）。
+# ⚠️ 升级前先确认目标 tag 存在：`docker manifest inspect <image>`
+# ⚠️ 与 docker-compose.yml 共用 project name，因此**共用同一套数据卷**；
+#    两种形态互相切换时先 `down` 再 `up`，否则会留下上一种形态的孤儿容器。
+
+name: llmbridge
+
+services:
+  api:
+    # 没有 build 段。想本地改代码就回到 docker-compose.yml。
+    image: ${LLMBRIDGE_REGISTRY:-registry.cn-hangzhou.aliyuncs.com/winyeahs}/llmbridge-api:${LLMBRIDGE_TAG:-1.0.0}
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    environment:
+      # compose 内网用服务名 `db` 互访；这里覆盖 .env 里的 127.0.0.1。
+      # 驱动固定 psycopg3 —— 写成 asyncpg 会因为依赖未安装而启动即失败。
+      DATABASE_URL: postgresql+psycopg://llmbridge:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD 未设置}@db:5432/llmbridge
+      LLMBRIDGE_REPO_ROOT: /app
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "/usr/local/bin/healthcheck.py"]
+      interval: 30s
+      timeout: 5s
+      start_period: 25s
+      retries: 3
+    networks: [llmbridge]
+
+  web:
+    image: ${LLMBRIDGE_REGISTRY:-registry.cn-hangzhou.aliyuncs.com/winyeahs}/llmbridge-web:${LLMBRIDGE_TAG:-1.0.0}
+    restart: unless-stopped
+    ports:
+      - "${HTTP_PORT:-80}:80"
+    depends_on:
+      api:
+        condition: service_started
+    networks: [llmbridge]
+    # 前端产物与 nginx.conf 都在镜像里，所以这里**不需要任何 volumes**。
+    # 想临时改反代规则（例如加 HTTPS、调 client_max_body_size），挂一份覆盖即可：
+    # volumes:
+    #   - ../deploy/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    #   - ../deploy/certs:/etc/nginx/certs:ro
+
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: llmbridge
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD 未设置}
+      POSTGRES_DB: llmbridge
+      # 中文环境常踩：容器默认 C locale，中文排序/比较会不合预期。
+      POSTGRES_INITDB_ARGS: --encoding=UTF8 --locale=C
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U llmbridge -d llmbridge"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [llmbridge]
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [llmbridge]
+
+# 与 docker-compose.yml 同名，用于跨形态复用数据（见文件头说明）。
+volumes:
+  pgdata: {}
+  redisdata: {}
+
+networks:
+  llmbridge:
+    driver: bridge
+LLMBRIDGE_COMPOSE_EOF
+}
+
+# 仓库内执行时比对内嵌副本与真源，防止两边漂移（这是「两份内容」的唯一代价，
+# 所以用一个明示告警把它变成可见问题，而不是等目标机上出现诡异差异）。
+compare_embedded_compose() {
+    local repo_file="$1" tmp
+    tmp="$(mktemp)"
+    write_image_compose "$tmp"
+    if [ "$(cat "$tmp")" = "$(cat "$repo_file")" ]; then
+        rm -f "$tmp" 2>/dev/null || true
+        return 0
+    fi
+    rm -f "$tmp" 2>/dev/null || true
+    warn "内嵌编排与 $repo_file 内容不一致！请同步 deploy/docker-compose.image.yml 与 deploy/docker-deploy.sh 的内嵌副本。"
+}
 
 resolve_image_source() {
-    local allow_fetch="${1:-true}"
-    local rel="deploy/docker-compose.image.yml"
+    # 入参保留是为了与源码形态共用调用签名；--image 已不依赖网络。
+    local rel="$IMAGE_COMPOSE_REL"
 
-    # 脚本在仓库内 → 用仓库里那份，保证与当前代码同步。
+    # 脚本在仓库内 → 用仓库里那份（唯一真源），并比对防漂移。
     if [ -f "$0" ]; then
         local self_dir here parent
         case "$0" in
@@ -273,6 +520,7 @@ resolve_image_source() {
         if [ -f "$parent/$rel" ]; then
             SRC_DIR="$parent"
             info "使用当前仓库内的编排文件：$SRC_DIR/$rel"
+            compare_embedded_compose "$SRC_DIR/$rel"
             return 0
         fi
     fi
@@ -281,20 +529,16 @@ resolve_image_source() {
     # 这一形态的"版本"由镜像标签决定，拉代码只会拉回与本机镜像无关的源码。
     if [ -f "$DEPLOY_DIR/$rel" ]; then
         SRC_DIR="$(cd "$DEPLOY_DIR" && pwd)"
-        info "复用既有部署目录：$SRC_DIR"
+        info "复用既有编排文件：$SRC_DIR/$rel"
         return 0
     fi
 
-    [ "$allow_fetch" = "true" ] || \
-        die "未找到编排文件（$DEPLOY_DIR/$rel）。请先执行部署：bash $0 --image"
-
-    local url="https://raw.githubusercontent.com/${REPO_SLUG}/${REF}/${rel}"
-    mkdir -p "$DEPLOY_DIR/deploy"
+    # 都没有 → 落内嵌副本。目标机（只有本脚本一个文件）走的就是这条路。
+    mkdir -p "$DEPLOY_DIR"
     DEPLOY_DIR="$(cd "$DEPLOY_DIR" && pwd)"
-    info "下载编排文件：$url"
-    fetch_url "$url" "$DEPLOY_DIR/$rel" || die "下载失败。可手动下载该文件放到 $DEPLOY_DIR/deploy/ 后重试。"
     SRC_DIR="$DEPLOY_DIR"
-    ok "编排文件就绪：$SRC_DIR/$rel"
+    write_image_compose "$SRC_DIR/$rel"
+    ok "已写入内嵌编排文件：$SRC_DIR/$rel"
 }
 # 按形态分派。所有子命令都走这里，避免某个子命令漏判 --image ——
 # 那会在一个「没有源码的部署目录」里去读 pyproject.toml，报出与真实原因无关的错。
@@ -322,6 +566,31 @@ env_has_key() {
     esac
 }
 
+env_get() {
+    # 从 .env 读一个键的值（纯 shell，仍不依赖 grep）。
+    local envfile="$1" key="$2" line
+    [ -f "$envfile" ] || return 0
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in
+            "$key="*) printf '%s' "${line#"$key="}" ; return 0 ;;
+        esac
+    done < "$envfile"
+}
+
+sync_http_port_from_env() {
+    # 运维子命令（status 等）必须用**部署时写进 .env 的端口**，不能用命令行默认值。
+    # 不同步的话：`--port 8099` 装完，`status` 会去探 80 端口并报「健康检查失败」，
+    # 让人以为服务挂了（实测踩到）。只有用户显式传了 --port 才以命令行为准。
+    if [ "$PORT_GIVEN" = "true" ]; then
+        return 0
+    fi
+    local v
+    v="$(env_get "$SRC_DIR/.env" HTTP_PORT)"
+    if [ -n "$v" ]; then
+        HTTP_PORT="$v"
+    fi
+}
+
 set_env_kv() {
     # 幂等写入：键不存在则追加，存在则就地改值。
     # 容器库形态下 LLMBRIDGE_REGISTRY / LLMBRIDGE_TAG 必须以命令行为准，
@@ -346,9 +615,16 @@ sync_image_env() {
 }
 
 gen_secret() {
+    # 三种来源依次尝试，**不依赖 openssl** —— 最小化的服务器/精简系统上经常没有它，
+    # 而它恰恰是「目标机自动跑通」最容易被卡住的一步（旧版本直接去拉 node 镜像）。
     if command -v openssl >/dev/null 2>&1; then
         openssl rand -base64 32 | tr -d '\n'
+    elif command -v dd >/dev/null 2>&1 && command -v base64 >/dev/null 2>&1 && [ -r /dev/urandom ]; then
+        # 用 dd 而不是 head：head 在极简环境里可能缺失（本项目开发机的 Git Bash 就是）。
+        dd if=/dev/urandom bs=32 count=1 2>/dev/null | base64 | tr -d '\n'
     else
+        # 最后兜底才用容器：它要拉 node 镜像，在国内网络下可能是慢甚至失败的一步，
+        # 所以只在前两条都不成立时才走这里（例如在 macOS/Windows 上跑且无 openssl）。
         docker run --rm "$NODE_IMAGE" node -e \
             'process.stdout.write(require("crypto").randomBytes(32).toString("base64"))'
     fi
@@ -358,6 +634,12 @@ write_env() {
     local envfile="$SRC_DIR/.env"
     if [ -f "$envfile" ]; then
         info "保留既有 .env（不覆盖：其中的 ENCRYPTION_MASTER_KEY 一旦改变，已存厂商密钥将无法解密）"
+        # 端口例外：用户显式传了 --port 就应当生效，否则 compose 映射的还是旧端口，
+        # 而探活按新端口去探 —— 报「健康检查失败」，现象与真实原因差得很远。
+        if [ "$PORT_GIVEN" = "true" ]; then
+            set_env_kv "$envfile" HTTP_PORT "$HTTP_PORT"
+            info "已按 --port 更新 .env：HTTP_PORT=$HTTP_PORT"
+        fi
         if [ "$USE_IMAGE" = "true" ]; then
             sync_image_env "$envfile"
         fi
@@ -448,9 +730,46 @@ build_frontend() {
 
 compose() {
     # COMPOSE_FILE 由 --image 决定（deploy/docker-compose.yml 或 .image.yml）。
-    # cd 到 SRC_DIR 是必要的：compose 从这里读 .env 做变量插值，
-    # 而编排文件里的 env_file 正是相对路径 ../.env。
-    ( cd "$SRC_DIR" && $DC -f "$COMPOSE_FILE" "$@" )
+    # cd 到 SRC_DIR 是让相对路径与手册一致，但**光 cd 不够**：
+    #   compose 做变量插值（${POSTGRES_PASSWORD:?...} 之类）时只读「项目目录」下的 .env，
+    #   而项目目录默认是**编排文件所在目录**（<SRC_DIR>/deploy），不是 SRC_DIR。
+    #   不显式指定就必然报
+    #     error while interpolating services.api.environment.DATABASE_URL:
+    #     required variable POSTGRES_PASSWORD is missing a value
+    #   这条实测踩到过：容器都还没起，pull 就失败了。
+    # 注意：编排里的 `env_file: ../.env` 是另一条路径（相对编排文件解析），只影响容器
+    #   进程的环境变量，救不了插值 —— 两件事都要成立，所以两边都指向同一个文件。
+    # 文件被手工删掉时退回 /dev/null，保证 `down` / `status` 这类运维子命令仍可用。
+    local envf="$SRC_DIR/.env"
+    [ -f "$envf" ] || envf=/dev/null
+    ( cd "$SRC_DIR" && $DC --env-file "$envf" -f "$COMPOSE_FILE" "$@" )
+}
+
+compose_pull() {
+    # 拉取是幂等的，失败就再试一次。国内镜像加速器**偶发** short read / unexpected EOF
+    # （实测：redis 成功、postgres 报 `short read: expected 9065 bytes but got 0`），
+    # 直接 die 会让「一条命令装完」在最后一公里失败，而重试通常一次就过。
+    if compose pull; then
+        return 0
+    fi
+    warn "镜像拉取失败，10 秒后重试一次（国内加速器偶发 short read / EOF）..."
+    sleep 10
+    compose pull
+}
+
+probe_once() {
+    # 探活优先用本机 curl —— 它测的是「用户真正要访问的那条路」：
+    # 宿主机 → 映射端口 → nginx → api。
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsS --max-time 3 "http://127.0.0.1:${HTTP_PORT}/health" >/dev/null 2>&1
+        return $?
+    fi
+    # 目标机没有 curl（最小化发行版常见）时退一步：进 api 容器用 python 打自己的 /health。
+    # 好处是**不依赖服务名**，两种编排形态（服务名叫 api/web 或 api/nginx）都通用。
+    # 这一条只能证明后端起来了，不能证明 nginx 映射通了 —— 所以只在没有 curl 时才用。
+    compose exec -T api python -c \
+        "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).status == 200 else 1)" \
+        >/dev/null 2>&1
 }
 
 do_deploy() {
@@ -464,33 +783,39 @@ do_deploy() {
     resolve_any true
     step "准备配置"
     write_env
+    # 端口以 .env 为准（用户没显式传 --port 时），否则探活会去探默认的 80。
+    sync_http_port_from_env
     build_frontend
 
     if [ "$USE_IMAGE" = "true" ]; then
         step "拉取镜像并启动服务"
         info "镜像来源：$REGISTRY（tag=$IMAGE_TAG）"
         info "容器库不可达或标签不存在时，先执行 deploy/publish-image.sh 发布镜像。"
-        compose pull || die "拉取镜像失败。请确认容器库可访问、且 $IMAGE_TAG 已发布。"
-        compose up -d || die "启动失败。查看日志：bash $0 logs"
+        ensure_registry_login
+        compose_pull || die "拉取镜像失败。请确认容器库可访问、且 $IMAGE_TAG 已发布；若是私有仓库，请先 docker login 或设置 REGISTRY_USER / REGISTRY_PASSWORD。"
+        compose up -d || die "启动失败。查看日志：$(self_cmd) logs"
     else
         step "构建并启动服务"
         info "首次执行需要构建后端镜像并拉取 postgres/redis/nginx 镜像，约 2~5 分钟。"
-        compose up -d --build || die "启动失败。查看日志：bash $0 logs"
+        compose up -d --build || die "启动失败。查看日志：$(self_cmd) logs"
     fi
 
     step "等待服务就绪"
-    if command -v curl >/dev/null 2>&1; then
-        local i=1 url="http://127.0.0.1:${HTTP_PORT}/health"
-        while [ "$i" -le 60 ]; do
-            if curl -fsS --max-time 3 "$url" >/dev/null 2>&1; then
-                ok "服务已就绪（第 ${i} 次探测）"
-                break
-            fi
-            sleep 2
-            i=$((i + 1))
-        done
-    else
-        warn "未找到 curl，跳过自动探活。请手动访问 http://127.0.0.1:${HTTP_PORT}/health"
+    local i=1 ready="false"
+    while [ "$i" -le 60 ]; do
+        if probe_once; then
+            ok "服务已就绪（第 ${i} 次探测）"
+            ready="true"
+            break
+        fi
+        sleep 2
+        i=$((i + 1))
+    done
+    if [ "$ready" != "true" ]; then
+        # 不静默放过：没探通时要把「怎么看」直接给出来，否则目标机上只剩一句
+        # 「装完了但打不开」，现场无从下手。
+        warn "等待约 120 秒仍未通过健康检查。可能原因：镜像还在拉、db 尚未就绪、端口被占用。"
+        warn "排查：$(self_cmd) status    /    $(self_cmd) logs api"
     fi
 
     compose ps
@@ -500,17 +825,23 @@ do_deploy() {
         form_note="容器库形态（${REGISTRY} / tag=${IMAGE_TAG}）"
     fi
 
+    # 预先算好「再次调用本脚本」的写法：管道形态下不是 `bash xxx`（见 self_cmd 的说明）。
+    local self_hint
+    self_hint="$(self_cmd)"
+
     cat <<EOF
 
 ${C_GREEN}${C_BOLD}部署完成${C_OFF}
 
-  控制台       http://127.0.0.1:${HTTP_PORT}/admin
+  控制台       http://127.0.0.1:${HTTP_PORT}/
+               （从别的机器访问就把 127.0.0.1 换成这台机器的 IP/域名）
   默认账号     admin / admin123  ${C_RED}（首次登录后立即修改）${C_OFF}
   部署形态     ${form_note}
   部署目录     ${SRC_DIR}
   配置文件     ${SRC_DIR}/.env
-  日志         bash $0 logs
-  停止         bash $0 down
+  日志         ${self_hint} logs
+  状态         ${self_hint} status
+  停止         ${self_hint} down
 
 ${C_YELLOW}模型池初始为空是有意设计${C_OFF}
   接入通道已预置 13 家厂商 / 24 条通道，填 API Key 即可接入；
@@ -525,15 +856,12 @@ EOF
 do_status() {
     check_docker
     resolve_any false
+    sync_http_port_from_env
     compose ps
     echo
-    if ! command -v curl >/dev/null 2>&1; then
-        warn "未找到 curl，跳过健康检查。"
-        return 0
-    fi
-    if curl -fsS --max-time 3 "http://127.0.0.1:${HTTP_PORT}/health" 2>/dev/null; then
-        echo
-        ok "健康检查通过：http://127.0.0.1:${HTTP_PORT}"
+    # probe_once 自带「没有 curl 就进容器探」的兜底，所以这里不再单独判断 curl。
+    if probe_once; then
+        ok "健康检查通过：http://127.0.0.1:${HTTP_PORT}/health"
     else
         warn "健康检查失败。可能端口不是 ${HTTP_PORT}（看 .env 的 HTTP_PORT），或服务未启动。"
     fi
@@ -566,7 +894,8 @@ case "$ACTION" in
         if [ "$USE_IMAGE" = "true" ]; then
             # 容器库形态的「升级」= 拉新标签 + 重建容器，不碰代码。
             info "拉取 $REGISTRY 上的 tag=$IMAGE_TAG"
-            compose pull || die "拉取镜像失败。确认该标签已发布（deploy/publish-image.sh）。"
+            ensure_registry_login
+            compose_pull || die "拉取镜像失败。确认该标签已发布（deploy/publish-image.sh）。"
             compose up -d
             ok "升级完成（tag=$IMAGE_TAG）"
         else

@@ -3,8 +3,10 @@
 # 用法（在仓库根目录执行）：
 #   cp .env.example .env          # 然后改 JWT_SECRET / ENCRYPTION_MASTER_KEY / POSTGRES_PASSWORD
 #   cd admin-web && npm ci && npm run build && cd ..   # nginx 要挂 dist/
-#   docker compose -f deploy/docker-compose.yml up -d --build
+#   docker compose --env-file ./.env -f deploy/docker-compose.yml up -d --build
 #
+# 注意 `--env-file ./.env` 不能省：compose 的**变量插值**只读「编排文件所在目录」的
+# `.env`（即 deploy/.env），仓库根那份读不到，缺了会报 POSTGRES_PASSWORD 未设置。
 # 注意 `--build`：前端产物 dist/ 是 bind mount 进 nginx 的，
 # 改了前端必须重新 build，重启容器不会生效。
 

@@ -4,6 +4,113 @@
 
 ## [未发布]
 
+### 一条命令安装：镜像与脚本都从阿里云容器库取，不再依赖 GitHub
+
+- **安装脚本改为随镜像交付**：`deploy/Dockerfile` 把 `docker-deploy.sh` 与内嵌用的
+  `docker-compose.image.yml` 装进 api 镜像的 `/opt/llmbridge/deploy/`，于是目标机
+  一条命令即可安装，**全程不访问 GitHub**：
+
+  ```bash
+  docker run --rm --entrypoint cat \
+    registry.cn-hangzhou.aliyuncs.com/winyeahs/llmbridge-api:1.0.0 \
+    /opt/llmbridge/deploy/docker-deploy.sh | bash -s -- --image
+  ```
+
+  为什么必须这样做：安装脚本本身也得先送到目标机，而 `raw.githubusercontent.com`
+  在国内不可达 —— `curl ... | bash` 在目标机上是**必然失败**的；容器库反而是目标机
+  唯一一定能访问的地址（否则业务镜像也拉不下来）。选 api 镜像做载体是因为安装流程
+  随后要拉的就是这套镜像，**取脚本不会多下载一个字节**（`--entrypoint cat` 不能省：
+  默认入口会先做数据库初始化再起服务）。
+- 另新增 `deploy/Dockerfile.deploy` → 第三个镜像 **`llmbridge-deploy`**（基于 alpine，
+  约 8 MB，**不含业务代码**，只把脚本打印到 stdout）：想「只要脚本、不拉整套后端」时用它。
+  ⚠️ 它要求该仓库在容器库里是**公开**的 —— 实测 ACR 上 `llmbridge-api` / `llmbridge-web`
+  的匿名令牌带 `pull` 权限，而新建的 `llmbridge-deploy` 令牌 access 为空（401），
+  需在控制台把仓库改为公开，否则先 `docker login`。因此**文档与脚本默认给 api 镜像那条**。
+- `deploy/publish-image.sh` 支持第三个镜像（`--only` 增加 `deploy`），结束时直接打印
+  安装命令。三个镜像**同标签发布**，避免「新脚本去装旧镜像」。
+- **构建侧修复（国内必踩）**：`docker-container` 驱动的 BuildKit **不读宿主机的
+  `daemon.json`**，宿主机能 `docker pull` 并不代表构建器能拉基础镜像。实测构建死在
+  `failed to authorize: ... auth.docker.io/token ... Bad Gateway`。
+  现在脚本会写 `~/.docker/buildx/llmbridge-buildkitd.toml` 给构建器指定 `docker.io`
+  加速器，配置变化时自动重建构建器；可用 `LLMBRIDGE_REGISTRY_MIRRORS` 覆盖。
+- **端到端实测暴露并修掉 5 个真问题**（都属于「装上了但用不了」，只看 `docker ps` 发现不了）：
+
+  1. **`compose` 的变量插值读不到 `.env`**：compose 只在「项目目录」里找 `.env`，而项目目录
+     默认是**编排文件所在目录**（`<SRC_DIR>/deploy`），`.env` 却写在 `<SRC_DIR>`。现象是
+     `compose pull` 直接失败：`error while interpolating services.api.environment.DATABASE_URL:
+     required variable POSTGRES_PASSWORD is missing a value` —— 容器一个都没起。
+     → 显式传 `--env-file "$SRC_DIR/.env"`。注意编排里的 `env_file: ../.env` 是**另一条**路径
+     （相对编排文件解析），只影响容器进程环境，救不了插值；缺 `.env` 时退回 `/dev/null`，
+     保证 `down` / `status` 仍可用。
+  2. **脚本打印的控制台地址一直是错的**：写的是 `http://<host>:<port>/admin`，但 `/admin` 是
+     **后端接口前缀**（`/admin/auth/login` …），控制台 SPA 挂在**根路径** `/`。照提示打开只会
+     看到 `{"detail":"Not Found"}`。→ 改为 `http://<host>:<port>/`，`apple-container.sh` 同改。
+     实测：`/` → 200 且含 `<div id="app">`；`/admin/` → 404（正好证明两者不是一回事）。
+  3. **运维子命令漏 `--image` 会报与真实原因无关的错**：管道形态下 `... | bash -s -- status`
+     会退回源码形态，报「未找到部署目录」（目录明明在）。→ 加**形态自检**：部署目录里只有
+     `docker-compose.image.yml` 时自动按容器库形态处理。
+  4. **子命令用错端口**：`--port 8099` 装完，`status` 仍去探默认的 80，报「健康检查失败」，
+     看起来像服务挂了。→ 新增 `sync_http_port_from_env()`，从 `.env` 读回 `HTTP_PORT`；
+     用户显式传 `--port` 时以命令行为准并同步写回 `.env`。
+  5. **docker.io 拉取偶发失败**：实测 `postgres:16-alpine` 报
+     `short read: expected 9065 bytes but got 0: unexpected EOF`（国内加速器偶发）。
+     → 拉取失败自动重试一次（拉取本身幂等，重试通常一次就过）。
+- **文档里的手工命令补上 `--env-file`（两套形态原来都敲不通）**：同一次回归里顺手验了
+  文档给出的「手工等价操作」，结论是**源码形态与容器库形态一样中招**。干净临时目录内实测
+  （compose v5.5.1）：
+
+  ```
+  $ docker compose -f deploy/docker-compose.image.yml config --services
+  error while interpolating ... required variable POSTGRES_PASSWORD is missing a value
+  $ docker compose --env-file ./.env -f deploy/docker-compose.image.yml config --services
+  db redis api web
+  $ docker compose -f deploy/docker-compose.yml config --services
+  error while interpolating ... required variable POSTGRES_PASSWORD is missing a value
+  $ docker compose --env-file ./.env -f deploy/docker-compose.yml config --services
+  db redis api nginx
+  ```
+
+  即 README / 部署文档 / 运维手册 / 安装打包说明里**所有** `docker compose -f deploy/...`
+  命令都是「照抄必失败」，而源码形态这条**一直存在**、此前从未被发现（`docker-compose.yml`
+  里的 `env_file: ../.env` 只管容器内环境变量，救不了 compose 自己的插值）。
+  → **46 处**命令与编排注释统一补上 `--env-file ./.env`，并在 README（中英）、部署文档、
+  运维手册、安装打包说明与两份编排文件头部写明原因。
+- **核验镜像内容时的两个假结论来源（都实测踩过，已写进文档）**：
+  ① `docker run` 的默认 pull policy 是 `missing` —— 本机若已缓存同名 `:1.0.0`，它会**直接用本地那份**
+  而不去容器库取，于是 `cmp` 比的是**旧镜像**（新旧两份脚本的 md5 都是 `301947a0…`，一度被误判成
+  「推上去的是旧脚本」）。**核验镜像内容前必须显式 `docker pull`。**
+  ② buildkit 的**构建上下文快照在构建开始时就固定**，边构建边改仓库文件，打进镜像的仍是旧内容。
+  所以「改完 → 重推 → 再 `cmp` 断言」的顺序不能省，不能凭「刚推过」推断。
+- **Windows Git Bash 的路径改写**：`docker run --entrypoint cat <镜像> /opt/llmbridge/...` 里的 `/opt/...`
+  会被 MSYS 改写成 `C:/Program Files/Git/opt/...`，报 `No such file or directory`，看着像镜像里没这个文件。
+  前面加 `MSYS_NO_PATHCONV=1` 即可（Linux/macOS 无此层）。已记入 troubleshooting。
+- **已知性能问题（本次未修）**：`publish-image.sh` 每次构建都会重下依赖（`RUN pip install` 层不命中缓存，
+  实测 amd64 247 s、arm64 628 s；一次 `--only api` 约 11 分钟）。构建器本身是复用的
+  （`prepare_builder` 只在加速器配置变化时才重建），怀疑是 buildkit 的缓存回收把该层挤掉了。
+  后续可加 `--cache-to type=local` 把缓存落盘持久化。
+- **新增两个「交付核验」脚本**，把上面这套核验方法固化下来，别人也能复现：
+  `scripts/verify_registry.py`（走 Bearer 挑战查 `tags/list`，**不采信 `push` 退出码**；默认只查必须公开的
+  api / web —— `llmbridge-deploy` 默认私有，401 属预期；只回显标签列表，从不打印令牌）与
+  `scripts/verify_deploy.py`（装后**功能性**核验：控制台 SPA / `/health` / 真实登录 / 厂商目录已铺 /
+  模型池留空 / 概览页不 500；内置 `ProxyHandler({})` 绕开本机代理）。
+  实测：`verify_deploy.py --port 8099` → 7 项全过 `ALL_OK`（rc=0）；`verify_registry.py --tag 1.0.0` →
+  api / web 的 3 个标签全命中。另有 `scripts/check_compose_sync.py`：不碰 Docker 独立比对
+  「内嵌编排副本 vs 真源」（脚本自身的运行期比对需要真跑一次部署，CI 里用这个更省事）。
+- **编排文件由「下载」改为「内嵌」**：`docker-deploy.sh` 内嵌 `docker-compose.image.yml`，
+  目标机除容器库外不访问任何外网。脚本在仓库内运行时会自动比对两份内容，不一致即告警。
+- `deploy/Dockerfile` 顺带把部署脚本放进 api 镜像（约几十 KB）作为兜底：
+  `docker run --rm --entrypoint cat <api镜像> /opt/llmbridge/deploy/docker-deploy.sh | bash -s -- --image`。
+- **脚本健壮性（让「自动跑通」更稳）**：`gen_secret` 增加 `/dev/urandom + base64` 兜底
+  （不再依赖 `openssl`，也不再为生成密钥去拉 node 镜像）；探活在没有 `curl` 时改为进 api
+  容器用 python 探（不再直接跳过）；被 `sh`/`dash` 执行时给出人话提示；正式输出里的子命令
+  提示在管道形态下改写成同一条 `docker run`（原来会打印出没法照做的 `bash bash logs`）；
+  探活 120 秒未通过时给出 `status` / `logs` 排查命令（原来只有一句「部署完成」）；
+  控制台地址补上「从别的机器访问请换成本机 IP」的提示。
+- **`REGISTRY_USER` / `REGISTRY_PASSWORD` 真正落地**：此前文档与编排注释都写了「脚本会自动
+  登录」，但 `docker-deploy.sh` 里并没有这段实现。现在 `--image` 形态会在 `compose pull`
+  前检测登录态并自动 `docker login --password-stdin`（凭据只经环境变量，不写 `.env`、
+  不落盘、不进日志）。
+
 ### 首次运行引导：装完打开界面即可用
 
 - 新增 `app/services/bootstrap.py`，服务启动时自动完成四步（全部幂等，失败只记 ERROR

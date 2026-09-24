@@ -35,6 +35,17 @@ COPY deploy/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY deploy/healthcheck.py /usr/local/bin/healthcheck.py
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
+# 部署脚本也放进镜像（约几十 KB）：容器库是目标机唯一一定能访问的地址，于是
+# 「安装脚本」可以随镜像一起交付，不必依赖 GitHub（国内不可达）。
+# **这是目标机安装脚本的首选载体** —— 安装流程随后要拉的就是这套镜像，
+# 所以取脚本这一步不会多下载一个字节：
+#   docker run --rm --entrypoint cat <本镜像> /opt/llmbridge/deploy/docker-deploy.sh \
+#     | bash -s -- --image
+# 必须带 --entrypoint cat：默认 entrypoint 会先跑数据库初始化再起服务。
+# （另有 8 MB 的纯安装器镜像 llmbridge-deploy，见 deploy/Dockerfile.deploy —— 更轻，
+#   但要求该仓库在容器库里被设为公开；本镜像已确认可匿名拉取。）
+COPY deploy/docker-deploy.sh deploy/docker-compose.image.yml /opt/llmbridge/deploy/
+
 # 以非 root 运行：应用不需要写容器文件系统（日志走 stdout、数据库在外部）。
 RUN useradd --create-home --shell /usr/sbin/nologin llmbridge \
     && chown -R llmbridge:llmbridge /app
