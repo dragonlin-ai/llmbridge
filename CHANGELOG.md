@@ -4,7 +4,16 @@
 
 ## [未发布]
 
-### 修掉控制台打开即 403：SELinux 漏标父目录 + 探活把 403 误当「已就绪」
+### 修掉控制台反复 403 的最后一块：构建产物权限（DAC）被 umask 077 弄成 600/700
+
+- **根因（元凶）**：`write_env` 在「新建 .env」分支里把进程 `umask` 设成 `077` 后**全程未复位**。之后 `build_frontend` 用 vite 构建 `admin-web/dist` 时，文件被建成 `600`、目录被建成 `700`（`drwx------`，属主 `llmbridge`）。nginx 的 worker 以独立用户（RHEL 上是 `nginx`）运行，既进不去 `dist/`（无 `o+x`）也读不到文件（无 `o+r`）→ 控制台 403 Forbidden。上一轮的 SELinux 修复是必要条件但非充分条件，权限这块才是反复 403 的真凶；且重跑 `install.sh` 时 `build_frontend` 发现 `dist/index.html` 已存在会**跳过构建、也跳过修复**，所以怎么重跑都不好。
+- **修法**：
+  ① `write_env` 写完 `.env` 后立刻 `umask 022` 复位，杜绝再泄漏；
+  ② 新增 `_fix_frontend_perms`：无条件把 `admin-web` 树 `chmod -R u+rwX,go+rX`（文件 644 / 目录 755），并给安装根与 `admin-web` 目录补 `o+x`（仅供 nginx 搜索穿过，不开放 `o+r`）；该函数在 `_frontend_finalize` 与 `ensure_nginx`（探活前）都调用，覆盖「重跑跳过构建」的情形；
+  ③ SELinux 标整条路径（`nginx_fix_selinux`，上轮已加）保留——SELinux 管「上下文」、DAC 权限管「读/搜」，两者任一缺失都 403，现在都补齐。
+  ④ 纯部署层，未动接口/表结构/判定口径。
+- **服务器应急（已装实例不必重跑脚本）**：
+  `sudo chmod -R u+rwX,go+rX /opt/llmbridge/admin-web && sudo chmod o+x /opt/llmbridge /opt/llmbridge/admin-web && sudo nginx -t && sudo systemctl reload nginx`
 
 - **根因一（真 403）**：`nginx_fix_selinux` 原先只把 `…/admin-web/dist` 标 `httpd_sys_content_t`，漏了它的父目录 `admin-web` 与安装根 `/opt/llmbridge`。SELinux Enforcing 下，nginx 要读到 `dist/index.html` 必须能「穿过」`/opt/llmbridge → admin-web → dist` 每一层；父目录没标，traverse 被拦，直接 403 Forbidden（配置本身正确）。
 - **根因二（掩盖故障）**：上一轮的探活被改成「任意 HTTP 应答即算就绪」，于是 403 也被当成成功，摘要误报「控制台已就绪」，把真故障藏起来了。

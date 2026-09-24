@@ -464,6 +464,9 @@ TOOL_RESULT_MAX_CHARS=8000
 EOF
     chown "$RUN_USER:$RUN_USER" "$envfile"
     chmod 600 "$envfile"
+    # 关键：umask 077 只服务于上面那份含明文密钥的 .env，必须立即复位，
+    # 否则后续 vite 构建出的 dist 文件会是 600、目录 700，nginx 用户读不到 → 控制台 403。
+    umask 022
     ok "已生成 $envfile（密钥为随机值，权限 600）"
 }
 
@@ -684,12 +687,26 @@ _frontend_finalize() {
         if id -u "$RUN_USER" >/dev/null 2>&1; then
             chown -R "$RUN_USER:$RUN_USER" "$INSTALL_DIR/admin-web" 2>/dev/null || true
         fi
+        _fix_frontend_perms
         FRONTEND_OK="true"
         ok "前端产物就绪：$dist"
         return 0
     fi
     warn "构建命令返回成功，但未找到 $dist/index.html —— 请核对 admin-web/vite.config.ts 的 outDir。"
     return 1
+}
+
+_fix_frontend_perms() {
+    # nginx 的 worker 以独立用户（RHEL 上是 nginx，Debian 上是 www-data）运行，
+    # 必须能 traverse 并读取 dist 树，否则直接 403。
+    # 哪怕构建时因 umask 077（本脚本历史版本 write_env 曾泄漏）产出了 600/700 的权限，
+    # 这里也**无条件纠正**——并且覆盖「重跑时 build_frontend 发现 dist 已存在而跳过构建」的情形。
+    local tree="$INSTALL_DIR/admin-web"
+    [ -d "$tree" ] || return 0
+    # 文件 644、目录 755：属主可写，其余用户（含 nginx）可读/可进目录。
+    chmod -R u+rwX,go+rX "$tree" 2>/dev/null || true
+    # 安装根与各上级目录只需 o+x（搜索位）让 nginx 穿过；不开放 o+r，避免暴露目录列表/敏感文件。
+    chmod o+x "$INSTALL_DIR" "$tree" 2>/dev/null || true
 }
 
 _npm_build() {
@@ -1032,6 +1049,11 @@ ensure_nginx() {
         return 0
     fi
     ok "Nginx 已启动并加载站点配置"
+
+    # 5.5) 纠正前端产物权限，确保 nginx 用户能 traverse + 读取 dist（否则 403）。
+    # 放在 SELinux 之后、探活之前：SELinux 管「上下文」、这里管「DAC 权限」，
+    # 两者任一不满足都会 403；两者都补齐，控制台才能真打开。
+    _fix_frontend_perms
 
     # 6) 探活：通了才对外宣称「地址可用」
     if nginx_http_probe; then
