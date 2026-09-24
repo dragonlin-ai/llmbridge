@@ -266,9 +266,16 @@ run() {
 
 build_one() {
     local name="$1" image="$2" dockerfile="$3"
-    local -a args=(docker buildx build
-        --platform "$PLATFORMS"
-        --file "$dockerfile"
+    local -a args=()
+    if [ "$USE_LOAD" = "true" ]; then
+        # 本机验证模式用内置 docker 驱动：它继承 daemon.json 的 registry-mirrors
+        # （国内加速器）；docker-container 驱动的 BuildKit 跑在容器里，不走这份
+        # 配置，在「只能靠加速器访问 docker.io」的网络下会死在拉基础镜像。
+        args+=(docker build --platform "$PLATFORMS")
+    else
+        args+=(docker buildx build --platform "$PLATFORMS")
+    fi
+    args+=(--file "$dockerfile"
         --tag "${image}:${TAG}"
     )
     if [ -n "$IMMUTABLE_TAG" ]; then
@@ -278,7 +285,7 @@ build_one() {
     # `unknown/unknown` 平台条目，部分 registry 与旧版 docker pull 会因此失败。
     args+=(--provenance=false --sbom=false)
     if [ "$USE_LOAD" = "true" ]; then
-        args+=(--load)
+        :
     else
         args+=(--push)
     fi

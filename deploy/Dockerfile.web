@@ -1,4 +1,6 @@
-# syntax=docker/dockerfile:1
+# 说明：刻意不写 `# syntax=docker/dockerfile:1` —— 那行会让 buildx 去拉
+# docker/dockerfile 前端镜像，在国内网络下可能连 auth.docker.io 都到不了，
+# 构建死在第一步。本文件只用普通语法，守护进程内置 BuildKit 完全够用。
 #
 # LLM 路由中转系统 · 控制台前端镜像
 #
