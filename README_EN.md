@@ -275,7 +275,7 @@ Four options — pick the one that matches your environment:
 | Option | Best for | Prerequisites | In one line |
 |---|---|---|---|
 | **1 · Script install** (recommended) | Production on a Linux server | Linux + Python 3.11+ | one `curl` |
-| **2 · Docker Compose** (recommended) | Production anywhere, minimal host setup | Docker + Compose v2, registry access | **one `docker run` installs everything** |
+| **2 · Docker Compose** (recommended) | Production anywhere, minimal host setup | Docker + Compose v2, registry access | **generate config + `docker compose up -d`** |
 | **3 · Apple container** | Local development / trial on Apple Silicon | macOS 26+ and `container` 1.1.0+ | three subcommands |
 | **4 · Build from source** | Customization, offline delivery | Python 3.11+ / Node.js 20+ | see below |
 
@@ -410,43 +410,50 @@ journalctl -u llmbridge -f          # live logs
 
 ### Option 2: Docker Compose (recommended)
 
-**One command installs everything** — no source code, no local build:
+Prerequisites: Docker 20.10+ (with `docker compose` v2) and access to the container
+registry. **No source code, no Node.js, no GitHub.**
+
+**Quick start**:
 
 ```bash
+# 1. Create the deployment directory
+mkdir -p llmbridge && cd llmbridge
+
+# 2. Download and run the preparation script (writes ./docker-compose.yml + ./.env only; never touches Docker)
 docker run --rm --entrypoint cat \
   registry.cn-hangzhou.aliyuncs.com/winyeahs/llmbridge-api:1.0.0 \
   /opt/llmbridge/deploy/docker-deploy.sh | bash -s --
+
+# 3. Start the services (images are pulled automatically on first run)
+docker compose up -d
+
+# 4. Follow the logs
+docker compose logs -f api
 ```
 
-The script writes the compose file → generates `.env` → pulls the images → starts the
-containers → waits for the health check → prints the URL.
+Then open `http://<server-ip>:8081/` and log in with `admin / admin123`
+(change the password right after first login).
 
-Then open `http://<server-ip>:8081/` and log in with `admin / admin123`.
-
-Two prerequisites only: Docker installed (with `docker compose` v2), and access to the
-registry. **No Node.js, no GitHub, no source code needed.**
-
-Common commands (record the pipe once; run them from the same directory):
+From there on, use standard compose commands from the same directory:
 
 ```bash
-LB='docker run --rm --entrypoint cat registry.cn-hangzhou.aliyuncs.com/winyeahs/llmbridge-api:1.0.0 /opt/llmbridge/deploy/docker-deploy.sh'
-
-$LB | bash -s -- status        # status + health check
-$LB | bash -s -- logs api      # follow one service's logs
-$LB | bash -s -- down          # stop (volumes preserved)
-$LB | bash -s -- upgrade       # upgrade (set LLMBRIDGE_TAG in .env first)
-$LB | bash -s -- --port 8090   # different public port (default 8081)
+docker compose ps               # status + health check
+docker compose logs -f web      # follow one service's logs
+docker compose down             # stop (volumes preserved)
+docker compose up -d            # start again
 ```
 
-Switching registry (any third-party registry besides Aliyun): add
-`--registry <host>/<namespace>`; for a private registry also pass
-`REGISTRY_USER=<account> REGISTRY_PASSWORD=<password>` (auto login before pull,
-credentials never touch disk).
-
-> Upgrade/rollback, data migration, troubleshooting, publishing images, and the
-> "build from source" form are in
-> [`05-安装打包说明.md`](docs/阶段五-部署与交付/05-安装打包说明.md) §6.1 (Chinese) and
-> [`01-部署文档.md`](docs/阶段五-部署与交付/01-部署文档.md).
+> - Change the port / image tag: edit `HTTP_PORT` / `LLMBRIDGE_TAG` in `./.env`, then
+>   `docker compose up -d`.
+> - Let the script do the start as well (config + pull + up + health check): append
+>   `deploy` to step 2, i.e. `... | bash -s -- deploy`.
+> - Switching registry: add `--registry <host>/<namespace>` when generating; for a
+>   private registry also pass `REGISTRY_USER` / `REGISTRY_PASSWORD` (auto login before
+>   pull, credentials never touch disk).
+> - Upgrade/rollback, data migration, troubleshooting, publishing images, and the
+>   "build from source" form are in
+>   [`05-安装打包说明.md`](docs/阶段五-部署与交付/05-安装打包说明.md) §6.1 (Chinese) and
+>   [`01-部署文档.md`](docs/阶段五-部署与交付/01-部署文档.md).
 
 ---
 ### Option 3: Apple container (macOS)
@@ -729,7 +736,7 @@ llmbridge/
 ├── scripts/                  Idempotent ops scripts (catalog / migrations / release build / delivery checks)
 ├── deploy/                   Deployment assets
 │   ├── install.sh            ★ Option 1: Linux one-shot install (systemd)
-│   ├── docker-deploy.sh      ★ Option 2: Docker Compose one-shot deploy (cloud pull from registry)
+│   ├── docker-deploy.sh      ★ Option 2: Docker Compose deploy (generates config only; stop/start with standard docker compose)
 │   ├── publish-image.sh      ★ Publisher side of Form B: build and push the api + web + deploy images
 │   ├── apple-container.sh    ★ Option 3: macOS Apple container
 │   ├── Dockerfile            Backend image

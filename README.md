@@ -251,7 +251,7 @@ POST https://api.typesafe.ai/v1/systemone        // Authorization: Bearer $JEV_A
 | 方式 | 适用场景 | 前置依赖 | 一句话 |
 |---|---|---|---|
 | **方式一 · 脚本安装**（推荐） | Linux 服务器生产部署 | Linux + Python 3.11+ | 一条 `curl` 装完 |
-| **方式二 · Docker Compose**（推荐） | 任意平台生产部署、交付给客户、省去环境折腾 | Docker + Compose v2，能访问容器库 | **一条 `docker run` 装完** |
+| **方式二 · Docker Compose**（推荐） | 任意平台生产部署、交付给客户、省去环境折腾 | Docker + Compose v2，能访问容器库 | **生成配置 + `docker compose up -d`** |
 | **方式三 · Apple container** | Apple Silicon Mac 本地开发 / 试用 | macOS 26+ + `container` 1.1.0+ | 三个子命令 |
 | **方式四 · 源码编译** | 二次开发、离线交付、定制 | Python 3.11+ / Node.js 20+ | 见下文 |
 
@@ -376,39 +376,45 @@ journalctl -u llmbridge -f          # 实时日志
 
 ### 方式二：Docker Compose（推荐）
 
-**一条命令装完**，不用源码、不用本地构建：
+前置条件：Docker 20.10+（含 `docker compose` v2）、能访问容器库。
+**不需要源码、不需要 Node.js、不需要 GitHub。**
+
+**快速开始**：
 
 ```bash
+# 1. 创建部署目录
+mkdir -p llmbridge && cd llmbridge
+
+# 2. 下载并运行准备脚本（只生成 ./docker-compose.yml + ./.env，不碰 Docker）
 docker run --rm --entrypoint cat \
   registry.cn-hangzhou.aliyuncs.com/winyeahs/llmbridge-api:1.0.0 \
   /opt/llmbridge/deploy/docker-deploy.sh | bash -s --
+
+# 3. 启动服务（首次自动拉取镜像）
+docker compose up -d
+
+# 4. 查看日志
+docker compose logs -f api
 ```
 
-脚本自动完成：写编排 → 生成 `.env` → 拉镜像 → 起容器 → 等健康检查 → 打印访问地址。
+装完浏览器打开 `http://<服务器IP>:8081/`，用 `admin / admin123` 登录（首次登录后立即改密）。
 
-装完浏览器打开 `http://<服务器IP>:8081/`，用 `admin / admin123` 登录。
-
-前置条件只有两条：装了 Docker（含 `docker compose` v2）、能访问容器库。
-**不需要 Node.js、不需要 GitHub、不需要任何源码。**
-
-常用命令（把管道记成变量，同一目录下执行）：
+之后启停全部用标准 compose 命令（同一目录下执行）：
 
 ```bash
-LB='docker run --rm --entrypoint cat registry.cn-hangzhou.aliyuncs.com/winyeahs/llmbridge-api:1.0.0 /opt/llmbridge/deploy/docker-deploy.sh'
-
-$LB | bash -s -- status        # 状态 + 健康检查
-$LB | bash -s -- logs api      # 看某个服务的日志
-$LB | bash -s -- down          # 停止（保留数据）
-$LB | bash -s -- upgrade       # 升级（先在 .env 改 LLMBRIDGE_TAG）
-$LB | bash -s -- --port 8090   # 换对外端口（默认 8081）
+docker compose ps               # 状态 + 健康检查
+docker compose logs -f web      # 看某个服务的日志
+docker compose down             # 停止（数据卷保留）
+docker compose up -d            # 再次启动
 ```
 
-换镜像库（阿里云以外的第三方镜像库）：加 `--registry <host>/<命名空间>`；
-私有库再加 `REGISTRY_USER=<账号> REGISTRY_PASSWORD=<密码>`（pull 前自动登录，凭据不落盘）。
-
-> 升级回滚、数据迁移、常见问题、发布镜像，以及「本地有源码要自己改再构建」，
-> 见 [`05-安装打包说明.md`](docs/阶段五-部署与交付/05-安装打包说明.md) §6.1 与
-> [`01-部署文档.md`](docs/阶段五-部署与交付/01-部署文档.md)。
+> - 换端口 / 换镜像版本：编辑 `./.env` 的 `HTTP_PORT` / `LLMBRIDGE_TAG`，再 `docker compose up -d`。
+> - 让脚本连启动一起做完（生成配置 + 拉镜像 + 起容器 + 等健康检查）：第 2 步末尾加 `deploy`。
+> - 换镜像库：生成时追加 `--registry <host>/<命名空间>`；私有库再给
+>   `REGISTRY_USER` / `REGISTRY_PASSWORD`（拉取前自动登录，凭据不落盘）。
+> - 升级回滚、数据迁移、常见问题、发布镜像，以及「本地有源码要自己改再构建」，
+>   见 [`05-安装打包说明.md`](docs/阶段五-部署与交付/05-安装打包说明.md) §6.1 与
+>   [`01-部署文档.md`](docs/阶段五-部署与交付/01-部署文档.md)。
 
 ---
 ### 方式三：Apple container（macOS）
@@ -685,7 +691,7 @@ llmbridge/
 ├── scripts/                  幂等运维脚本（预置目录 / 历史库迁移 / 发行打包 / 交付核验）
 ├── deploy/                   部署产物
 │   ├── install.sh            ★ 方式一：Linux 一键安装（systemd）
-│   ├── docker-deploy.sh      ★ 方式二：Docker Compose 一键部署（云端直拉镜像）
+│   ├── docker-deploy.sh      ★ 方式二：Docker Compose 部署（默认只生成配置，启停用标准 docker compose）
 │   ├── publish-image.sh      ★ 容器库形态的发布侧：构建并推送 api + web + deploy 三个镜像
 │   ├── apple-container.sh    ★ 方式三：macOS Apple container
 │   ├── Dockerfile            后端镜像

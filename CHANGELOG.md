@@ -4,6 +4,33 @@
 
 ## [未发布]
 
+### 方式二改为 Sub2API 形态：默认只生成配置，启停用标准 docker compose
+
+- **默认行为翻转（prepare）**：`docker-deploy.sh` 无子命令时的默认动作由 `deploy`（一条龙）
+  改为 **`prepare`** —— 只在当前目录生成 `./docker-compose.yml` + `./.env`（随机密钥、权限 600），
+  **全程不碰 Docker**；随后用最普通的 `docker compose up -d` / `docker compose logs -f api` 启停，
+  与 Sub2API 的安装体验一致（mkdir → 跑脚本 → up → logs 四步）。
+- **根目录标准名，免 `--env-file`**：生成的编排落在 cwd 的标准名 `./docker-compose.yml`
+  （真源 `deploy/docker-compose.image.yml` 的副本），唯一差异是 `env_file` 由 `../.env` 改写为
+  同目录 `.env` —— 于是 compose 的「变量插值」（自动读 cwd 的 `.env`）与「容器环境变量」
+  两条路径都落在同一份 `./.env` 上，`docker compose up -d` 不再需要 `-f` / `--env-file`。
+- **`deploy` 子命令保留**：末尾加 `deploy` 仍是「生成配置 + 拉镜像 + 起容器 + 等健康检查 +
+  打印地址」的一条龙；`status` / `logs` / `down` / `upgrade` / `purge` 在 prepare 布局里
+  自动识别（`resolve_image_source` 新增 step 0，按**内容**判定 cwd 编排是否本项目）。
+- **四类护栏**：cwd 已有**非本项目**的 `docker-compose.yml` 拒绝覆盖；上一层存在旧布局
+  （`./llmbridge/…`）而 cwd 无 `.env` 时拒绝生成（防分叉出第二套空数据库）；源码仓库根上
+  运行仅告警；`prepare` 不接受 `--source`、忽略 `--dir`（配置就落当前目录）。
+- **兼容性**：上一版的旧布局 `llmbridge/deploy/docker-compose.image.yml` 仍被自动识别复用，
+  已在运行的实例不受影响；`--image` 仍被接受。
+- **顺带修复**：内嵌编排的端口默认值 `${HTTP_PORT:-80}` 漂移回 `${HTTP_PORT:-8081}`
+  （真源早已是 8081，内嵌副本漏改）。
+- **文档同步**：README（中英）方式二改为四步快速开始块 + 标准 compose 命令；
+  `01-部署文档.md` 顶部与 §3.6、`05-安装打包说明.md` §6.0 / §6.1.1（含布局树与手工等价命令）
+  全部改写为 prepare → compose 两步口径。
+- **范围**：部署脚本 + 文档层，**未动任何接口、表结构或判定口径**。
+- ⚠️ **交付提醒**：one-liner 从 api 镜像内取脚本，需用 `deploy/publish-image.sh` **重推镜像**后，
+  客户拿到的才是新脚本。
+
 ### 方式二默认改为「云端直拉镜像」：不需要源码、不需要本地构建
 
 - **默认形态翻转**：`docker-deploy.sh` 的 `USE_IMAGE` 由 `false` 改为 `true`，于是**默认就是云端直拉**

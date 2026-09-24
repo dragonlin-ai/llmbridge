@@ -4,26 +4,32 @@
 #  LLM 路由中转系统（llmbridge）· Docker Compose 一键部署脚本
 # =============================================================================
 #
-#  用法：
-#    # 云端直拉镜像（**默认形态：不需要任何源码、不需要本地构建**）—— 交付给客户 / 生产首选：
+#  用法（Sub2API 形态：脚本只生成配置，启停用标准 docker compose 命令）：
+#    mkdir -p llmbridge && cd llmbridge
 #    docker run --rm --entrypoint cat \
 #      registry.cn-hangzhou.aliyuncs.com/winyeahs/llmbridge-api:1.0.0 \
-#      /opt/llmbridge/deploy/docker-deploy.sh | bash -s --
-#    # 上面等价于显式加 --image；--image 现在就是默认行为，可省略。
+#      /opt/llmbridge/deploy/docker-deploy.sh | bash -s --    # 只生成 ./docker-compose.yml + ./.env
+#    docker compose up -d                                     # 启动（首次自动拉镜像）
+#    docker compose logs -f api                               # 跟随后端日志
 #
-#    # 换镜像库（阿里云以外的第三方镜像库）：
+#    # 脚本连启动一起做完（生成配置 + 拉镜像 + 起容器 + 等健康检查 + 打印地址）：
 #    docker run --rm --entrypoint cat \
-#      <第三方镜像库host>/<命名空间>/llmbridge-api:1.0.0 \
-#      /opt/llmbridge/deploy/docker-deploy.sh | bash -s -- --registry <第三方镜像库host>/<命名空间>
+#      registry.cn-hangzhou.aliyuncs.com/winyeahs/llmbridge-api:1.0.0 \
+#      /opt/llmbridge/deploy/docker-deploy.sh | bash -s -- deploy
+#
+#    # 换镜像库（阿里云以外的第三方镜像库）：生成时追加
+#    #   --registry <第三方镜像库host>/<命名空间>
+#    # 私有库再给 REGISTRY_USER / REGISTRY_PASSWORD（deploy 拉取前自动 docker login）。
 #
 #    # 本地已有源码、想改代码后再构建（可选形态）：
-#    bash deploy/docker-deploy.sh --source
+#    bash deploy/docker-deploy.sh deploy --source
 #
 #  目标机最低要求（云端直拉形态）：
 #    1) 装了 Docker（含 compose v2）；2) 能访问容器库（默认阿里云 ACR，可用 --registry 换任意第三方镜像库）。
 #    就这两样 —— 不需要源码、不需要 Node、不需要 .env 模板、不需要登录容器库
 #    （镜像仓库是公开的，匿名可拉）、除容器库外不访问任何外网（编排文件内嵌在本脚本里）。
-#    脚本会自动生成含随机密钥的 .env、拉镜像、起容器、等健康检查、打印访问地址与账号。
+#    默认只在当前目录生成编排文件与含随机密钥的 .env（不碰 Docker）；末尾加 deploy 才会
+#    拉镜像、起容器、等健康检查、打印访问地址与账号。
 #
 #  为什么安装脚本要从容器库的镜像里取：
 #    脚本本身也得先送到目标机，而 GitHub（raw.githubusercontent.com）在国内不可达 ——
@@ -37,26 +43,26 @@
 #    源码仓库里用）—— 三者跑的是同一个脚本、同一套编排，结果一致。
 #
 #  子命令：
-#    (无) / deploy   准备配置 + 构建前端 + 启动全部服务
+#    (无) / prepare  **默认**：只在当前目录生成 ./docker-compose.yml + ./.env
+#                    （含随机密钥），全程不碰 Docker —— 之后启停用标准 docker compose
+#    deploy          一键全量：生成配置 + 拉镜像 + 起容器 + 等健康检查 + 打印地址
 #    status          查看容器状态与健康检查
 #    logs            跟随日志（可跟服务名：logs api）
 #    down            停止并移除容器（保留数据卷）
-#    upgrade         拉取最新代码 + 重建镜像 + 重启（数据保留）
+#    upgrade         拉取最新镜像 + 重启（数据保留）
 #    purge           停止并**删除数据卷**（不可恢复，二次确认）
 #
 #  选项：
-#    --dir <path>       部署目录（默认 ./llmbridge；目录内已是仓库时直接复用）
-#    --ref <ref>        源码版本：分支 / tag（默认 main）
-#    --port <n>         控制台对外端口（默认 8081）
+#    --port <n>         控制台对外端口（默认 8081；prepare 时写进 ./.env）
 #    --pg-password <p>  PostgreSQL 密码（默认随机 32 位）
-#    --skip-frontend    跳过前端构建（仅在你已有 admin-web/dist 时使用）
-#    --image            云端直拉形态（**默认**，可省略）：不下载源码、不构建前端。编排文件
-#                       已内嵌在本脚本里，因此**不需要联网下载任何文件**（除容器库本身）：
-#                       写编排 → 生成 .env → 拉镜像 → 起容器 → 探活。镜像需先发布，见 publish-image.sh
-#    --source           本地源码构建形态：不拉镜像，改用当前源码（或下载源码）本地构建。
-#                       只有「你有源码、要改了代码再构建」时才用；默认是云端直拉。
 #    --registry <host/ns>  容器库地址与命名空间（默认阿里云 ACR；可换任意第三方镜像库）
-#    --tag <tag>           镜像版本标签（云端直拉形态用，默认 1.0.0）
+#    --tag <tag>           镜像版本标签（默认 1.0.0）
+#    --dir <path>       部署目录（**仅源码形态**默认 ./llmbridge；镜像形态显式传了才用，
+#                       默认就落当前目录；prepare 模式下传了会被忽略并提示）
+#    --ref <ref>        源码版本：分支 / tag（默认 main；镜像形态下无意义）
+#    --skip-frontend    跳过前端构建（仅源码形态、你已有 admin-web/dist 时使用）
+#    --source           本地源码构建形态（配合 deploy）：不拉镜像，改用当前源码本地构建。
+#                       只有「你有源码、要改了代码再构建」时才用；默认是云端直拉。
 #    -y, --yes          非交互
 #
 #  环境变量：
@@ -85,7 +91,7 @@
 # "Illegal option"，那句报错离真实原因很远，所以在这里先给一句人话。
 if [ -z "${BASH_VERSION:-}" ]; then
     echo "[失败] 本脚本需要 bash 执行（用到数组），不能用 sh/dash。" >&2
-    echo "       请用：bash docker-deploy.sh --image" >&2
+    echo "       请用：bash docker-deploy.sh" >&2
     exit 1
 fi
 
@@ -96,13 +102,14 @@ DEFAULT_REF="main"
 NODE_IMAGE="node:22-alpine"
 
 DEPLOY_DIR="./llmbridge"
+DIR_GIVEN="false"
 REF="$DEFAULT_REF"
 HTTP_PORT="8081"
 PORT_GIVEN="false"
 PG_PASSWORD=""
 SKIP_FRONTEND="false"
 ASSUME_YES="false"
-ACTION="deploy"
+ACTION="prepare"
 USE_IMAGE="true"
 REGISTRY="registry.cn-hangzhou.aliyuncs.com/winyeahs"
 IMAGE_TAG="1.0.0"
@@ -165,7 +172,7 @@ self_cmd() {
 LOG_SERVICE=""
 if [ $# -gt 0 ]; then
     case "$1" in
-        deploy|status|logs|down|purge|upgrade) ACTION="$1"; shift ;;
+        prepare|deploy|status|logs|down|purge|upgrade) ACTION="$1"; shift ;;
         help|-h|--help) usage ;;
         --*) ;;                       # 以 - 开头的是选项，落到下面解析
         *)   die "未知子命令：$1" ;;
@@ -180,7 +187,7 @@ fi
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --dir)          DEPLOY_DIR="${2:?--dir 需要参数}"; shift 2 ;;
+        --dir)          DEPLOY_DIR="${2:?--dir 需要参数}"; DIR_GIVEN="true"; shift 2 ;;
         --ref)          REF="${2:?--ref 需要参数}"; shift 2 ;;
         --port)         HTTP_PORT="${2:?--port 需要参数}"; PORT_GIVEN="true"; shift 2 ;;
         --pg-password)  PG_PASSWORD="${2:?--pg-password 需要参数}"; shift 2 ;;
@@ -381,23 +388,28 @@ write_image_compose() {
 # 与 deploy/docker-compose.yml 的区别，只有一句话：
 #   **这份文件不含任何 `build:` 段，全部镜像从容器库拉取，目标机不需要源码。**
 #
-# 目标机推荐用法（一条命令，脚本会自动生成 .env 并探活）：
+# 目标机推荐用法（Sub2API 形态：脚本只生成配置，启停用标准 docker compose）：
+#   mkdir -p llmbridge && cd llmbridge
 #   docker run --rm --entrypoint cat \
 #     registry.cn-hangzhou.aliyuncs.com/winyeahs/llmbridge-api:1.0.0 \
-#     /opt/llmbridge/deploy/docker-deploy.sh | bash -s -- --image
-#   # 需要换端口：   ... | bash -s -- --image --port 8080
-#   # 已有源码仓库： bash deploy/docker-deploy.sh --image
+#     /opt/llmbridge/deploy/docker-deploy.sh | bash -s --    # 只生成 ./docker-compose.yml + ./.env
+#   docker compose up -d                                     # 启动（首次自动拉镜像）
+#   docker compose logs -f api                               # 跟随后端日志
+#   # 连启动一起做完（生成配置 + 拉镜像 + 起容器 + 等健康检查）：命令末尾加 deploy
+#   # 需要换端口：   ... | bash -s -- --port 8080
 #
-# 本文件是**唯一真源**：可读、可 diff、也可单独使用 ——
+# 本文件是**唯一真源**：可读、可 diff，也可留在仓库根直接使用 ——
 #   docker compose --env-file ./.env -f deploy/docker-compose.image.yml up -d
 #   ⚠️ `--env-file ./.env` 不能省：compose 的**变量插值**只读「编排文件所在目录」的
 #      `.env`（即 deploy/.env），必须显式指到根下那一份，否则报
 #      `required variable POSTGRES_PASSWORD is missing a value`。
+#   而脚本生成的**根目录副本 ./docker-compose.yml** 已把 env_file 改写为同目录的 ./.env，
+#   两条路径都落在同一份文件上，所以标准 `docker compose up -d` 不需要 --env-file。
 #
 # ⚠️ docker-deploy.sh 里**内嵌了一份等价内容**，供「手上只有那一个脚本文件」的
 #    目标机离线使用（国内网络下 raw.githubusercontent.com 不可达，原来那条
 #    下载编排的路径在目标机上必然失败）。改动本文件必须同步内嵌副本 ——
-#    在仓库内执行 `bash deploy/docker-deploy.sh --image` 时会自动比对并告警。
+#    在仓库内执行 `bash deploy/docker-deploy.sh deploy` 时会自动比对并告警。
 #
 # 只有 4 个服务，没有源码目录、没有 bind mount、没有前端构建步骤：
 #   api  ← llmbridge-api:<tag>   后端
@@ -443,7 +455,7 @@ services:
     image: ${LLMBRIDGE_REGISTRY:-registry.cn-hangzhou.aliyuncs.com/winyeahs}/llmbridge-web:${LLMBRIDGE_TAG:-1.0.0}
     restart: unless-stopped
     ports:
-      - "${HTTP_PORT:-80}:80"
+      - "${HTTP_PORT:-8081}:80"
     depends_on:
       api:
         condition: service_started
@@ -510,9 +522,65 @@ compare_embedded_compose() {
     warn "内嵌编排与 $repo_file 内容不一致！请同步 deploy/docker-compose.image.yml 与 deploy/docker-deploy.sh 的内嵌副本。"
 }
 
+# 根形态副本：把内嵌编排里的 `env_file: ../.env` 改写成 `env_file: .env` 后写到 $1。
+# 为什么必须改这一行（Sub2API 形态的命门）：
+#   `docker compose up -d`（不带 -f / --env-file）要求编排就叫 ./docker-compose.yml 落在
+#   当前目录；compose 的**变量插值**自动读当前目录的 .env（这条没问题），但 `env_file:`
+#   指令是**相对编排文件**解析的 —— 编排挪到根目录后，../.env 会指到上一层，容器起来
+#   就没有环境变量。改写成 .env 后两条路径都落在同一份 ./.env，用户用最普通的
+#   `docker compose up -d` 即可，不再需要 --env-file。
+write_root_compose() {
+    local dest="$1" tmp line content=""
+    tmp="$(mktemp)"
+    write_image_compose "$tmp"
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in
+            "      - ../.env") line="      - .env" ;;
+        esac
+        content="${content}${line}"$'\n'
+    done < "$tmp"
+    rm -f "$tmp" 2>/dev/null || true
+
+    if [ -f "$dest" ]; then
+        # 内容判据：只有含 llmbridge-api 的才是本项目的编排，否则拒绝覆盖（防误伤）。
+        case "$(cat "$dest")" in
+            *llmbridge-api*) ;;
+            *) die "$dest 已存在且不是本项目的编排，拒绝覆盖。请 mkdir -p llmbridge && cd llmbridge 后重跑。" ;;
+        esac
+        if [ "$(cat "$dest")" = "$(printf '%s' "$content")" ]; then
+            info "$dest 已是最新（幂等重跑），未改动。"
+            return 0
+        fi
+        warn "$dest 与默认编排不一致（可能被手工改过），将被覆盖。"
+    fi
+    printf '%s' "$content" > "$dest"
+
+    # 写后自检：改写必须真的发生，否则容器会因读不到 ../.env 而起不来。
+    case "$(cat "$dest")" in
+        *"      - ../.env"*) die "生成 $dest 失败：env_file 仍是 ../.env（内嵌编排可能已变更，请检查本脚本）。" ;;
+        *"      - .env"*) ;;
+        *) die "生成 $dest 失败：未找到 env_file 行（内嵌编排可能已变更，请检查本脚本）。" ;;
+    esac
+    ok "已写入编排文件：$dest（env_file 指向同目录 ./.env）"
+}
+
 resolve_image_source() {
     # 入参保留是为了与源码形态共用调用签名；--image 已不依赖网络。
     local rel="$IMAGE_COMPOSE_REL"
+
+    # step 0：当前目录就是 prepare 生成的根形态部署 → status/logs/down/upgrade/purge
+    #   与 deploy 全部直接用它。判据用**内容**而非文件名：任何项目都可能有
+    #   ./docker-compose.yml，只有含 llmbridge-api 的才是本项目的。
+    if [ -f "./docker-compose.yml" ]; then
+        case "$(cat ./docker-compose.yml)" in
+            *llmbridge-api*)
+                SRC_DIR="$(pwd)"
+                COMPOSE_FILE="docker-compose.yml"
+                info "使用当前目录的编排文件：$SRC_DIR/docker-compose.yml"
+                return 0
+                ;;
+        esac
+    fi
 
     # 脚本在仓库内 → 用仓库里那份（唯一真源），并比对防漂移。
     if [ -f "$0" ]; then
@@ -531,7 +599,8 @@ resolve_image_source() {
         fi
     fi
 
-    # 部署目录里已有 → 复用。--image 形态刻意不 git pull：
+    # 旧布局部署目录里已有 → 复用（向后兼容：上一版脚本把编排落在
+    # <dir>/deploy/docker-compose.image.yml）。--image 形态刻意不 git pull：
     # 这一形态的"版本"由镜像标签决定，拉代码只会拉回与本机镜像无关的源码。
     if [ -f "$DEPLOY_DIR/$rel" ]; then
         SRC_DIR="$(cd "$DEPLOY_DIR" && pwd)"
@@ -539,12 +608,17 @@ resolve_image_source() {
         return 0
     fi
 
-    # 都没有 → 落内嵌副本。目标机（只有本脚本一个文件）走的就是这条路。
-    mkdir -p "$DEPLOY_DIR"
-    DEPLOY_DIR="$(cd "$DEPLOY_DIR" && pwd)"
-    SRC_DIR="$DEPLOY_DIR"
-    write_image_compose "$SRC_DIR/$rel"
-    ok "已写入内嵌编排文件：$SRC_DIR/$rel"
+    # 都没有 → 落**根形态**副本：默认就在当前目录（Sub2API 布局），
+    # 只有显式传了 --dir 才 mkdir 到指定目录。目标机（只有本脚本一个文件）走的就是这条路。
+    if [ "$DIR_GIVEN" = "true" ]; then
+        mkdir -p "$DEPLOY_DIR"
+        DEPLOY_DIR="$(cd "$DEPLOY_DIR" && pwd)"
+        SRC_DIR="$DEPLOY_DIR"
+    else
+        SRC_DIR="$(pwd)"
+    fi
+    COMPOSE_FILE="docker-compose.yml"
+    write_root_compose "$SRC_DIR/docker-compose.yml"
 }
 # 按形态分派。所有子命令都走这里，避免某个子命令漏判 --image ——
 # 那会在一个「没有源码的部署目录」里去读 pyproject.toml，报出与真实原因无关的错。
@@ -778,6 +852,66 @@ probe_once() {
         >/dev/null 2>&1
 }
 
+# 默认动作（Sub2API 形态）：只在当前目录生成编排 + .env，**全程不碰 Docker**。
+# 之后的启停交给最标准的 `docker compose up -d` / `docker compose logs -f api`。
+do_prepare() {
+    step "生成部署配置（prepare：不碰 Docker）"
+
+    if [ "$USE_IMAGE" = "false" ]; then
+        die "prepare 只支持镜像形态（默认）。源码构建请用：$(self_cmd) deploy --source"
+    fi
+    if [ "$DIR_GIVEN" = "true" ]; then
+        warn "--dir 在 prepare 模式下被忽略：配置就生成在当前目录（$(pwd)）。"
+    fi
+    # cwd 已有编排文件时：本项目的幂等保留；别人的拒绝覆盖。
+    if [ -f "./docker-compose.yml" ]; then
+        case "$(cat ./docker-compose.yml)" in
+            *llmbridge-api*) info "检测到本项目已生成的 ./docker-compose.yml（幂等重跑）。" ;;
+            *) die "当前目录已有不是本项目的 ./docker-compose.yml，拒绝覆盖。请 mkdir -p llmbridge && cd llmbridge 后重跑。" ;;
+        esac
+    fi
+    # 在源码仓库根上跑：只提醒不拦（自家运维可能就是想就地生成）。
+    if [ -f "./pyproject.toml" ] && [ -f "./deploy/docker-compose.yml" ]; then
+        warn "当前目录是 llmbridge 源码仓库根：建议在空目录生成配置（mkdir -p ../llmbridge-deploy && cd ../llmbridge-deploy），避免与源码混放。"
+    fi
+    # 上一层已有旧布局/--dir 布局的部署，而当前目录还没有 .env：
+    # 直接再生成一份 .env 会分叉出一套全新的空数据库（连的是新密码/新卷），
+    # 现场表现为「装完发现以前的数据全没了」—— 必须拦。
+    if [ ! -f "./.env" ] && { [ -f "./llmbridge/deploy/docker-compose.image.yml" ] || [ -f "./llmbridge/docker-compose.yml" ]; }; then
+        die "检测到 ./llmbridge/ 下已有本项目的部署，而当前目录没有 .env —— 在这里再生成会分叉出一套全新的空数据库。请二选一：cd llmbridge 后重跑本脚本（沿用既有 .env），或先 mv ./llmbridge <备份名> 再部署。"
+    fi
+
+    SRC_DIR="$(pwd)"
+    COMPOSE_FILE="docker-compose.yml"
+    write_root_compose "./docker-compose.yml"
+    write_env
+    # 端口以刚生成/既有的 .env 为准（用户没显式传 --port 时），摘要里才打得对。
+    sync_http_port_from_env
+
+    # 下面这段会进 unquoted heredoc：**一个反引号都不能有**（会被命令替换执行）。
+    cat <<EOF
+
+${C_GREEN}${C_BOLD}配置已生成${C_OFF}（当前目录：${SRC_DIR}）
+
+  ./docker-compose.yml   编排文件（api / web / db / redis 共 4 个服务）
+  ./.env                 随机密钥与端口（权限 600，请勿提交 git）
+  控制台端口             ${HTTP_PORT}
+
+下一步用标准 docker compose 启停（无需再调本脚本）：
+  docker compose up -d           # 启动（首次自动拉取镜像）
+  docker compose logs -f api     # 跟随后端日志
+  docker compose ps              # 查看容器状态
+  docker compose down            # 停止（数据卷保留）
+
+  控制台       http://127.0.0.1:${HTTP_PORT}/
+  默认账号     admin / admin123  ${C_RED}（首次登录后立即修改）${C_OFF}
+
+  改端口/换镜像版本：编辑 ./.env 的 HTTP_PORT 或 LLMBRIDGE_TAG，再 docker compose up -d
+  想让脚本连启动一起做完：命令末尾加 deploy，即 $(self_cmd) deploy
+
+EOF
+}
+
 do_deploy() {
     step "环境检查"
     check_docker
@@ -889,6 +1023,7 @@ do_purge() {
 # =============================================================================
 
 case "$ACTION" in
+    prepare) do_prepare ;;
     deploy)  do_deploy ;;
     status)  do_status ;;
     logs)    check_docker; resolve_any false; compose logs -f ${LOG_SERVICE:+"$LOG_SERVICE"} ;;

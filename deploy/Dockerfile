@@ -40,7 +40,7 @@ RUN chmod +x /usr/local/bin/entrypoint.sh
 # **这是目标机安装脚本的首选载体** —— 安装流程随后要拉的就是这套镜像，
 # 所以取脚本这一步不会多下载一个字节：
 #   docker run --rm --entrypoint cat <本镜像> /opt/llmbridge/deploy/docker-deploy.sh \
-#     | bash -s -- --image
+#     | bash -s --
 # 必须带 --entrypoint cat：默认 entrypoint 会先跑数据库初始化再起服务。
 # （另有 8 MB 的纯安装器镜像 llmbridge-deploy，见 deploy/Dockerfile.deploy —— 更轻，
 #   但要求该仓库在容器库里被设为公开；本镜像已确认可匿名拉取。）

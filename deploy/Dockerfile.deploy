@@ -9,7 +9,9 @@
 # 于是目标机可以用一条命令从容器库取到安装脚本并直接执行：
 #
 #     docker run --rm registry.cn-hangzhou.aliyuncs.com/winyeahs/llmbridge-deploy:1.0.0 \
-#       | bash -s -- --image
+#       | bash -s --
+#   （默认只生成 ./docker-compose.yml + ./.env，随后 docker compose up -d 启停；
+#     末尾加 deploy = 配置 + 启动一条龙）
 #
 # ⚠️ **前提：这个仓库在容器库里必须是「公开」的。** 阿里云 ACR 新建仓库默认**私有**，
 #    私有仓库的匿名令牌不带 pull 权限，目标机会报 401 而 `docker pull` 失败
@@ -17,7 +19,7 @@
 #    默认不可 —— 需要在控制台「容器镜像服务 → 命名空间 → 仓库 → 修改」里设为公开）。
 #    不想动这个设置就用 api 镜像里那份同源脚本，命令见 deploy/Dockerfile 的注释：
 #      docker run --rm --entrypoint cat <api镜像> /opt/llmbridge/deploy/docker-deploy.sh \
-#        | bash -s -- --image
+#        | bash -s --
 #
 # 为什么要有这个镜像（而不是让用户去下载脚本）：
 #   1. GitHub 在国内基本不可达，raw.githubusercontent.com 更是超时 ——
@@ -36,8 +38,8 @@
 #   cat 报 `unrecognized option`；包一层 sh 后多余参数被忽略。
 #
 # 用法（三种等价写法）：
-#   1) 直接管道安装（推荐）  docker run --rm <image> | bash -s -- --image
-#   2) 先落盘再执行           docker run --rm <image> > docker-deploy.sh && bash docker-deploy.sh --image
+#   1) 直接管道执行（推荐）  docker run --rm <image> | bash -s --
+#   2) 先落盘再执行           docker run --rm <image> > docker-deploy.sh && bash docker-deploy.sh
 #   3) 只看不装               docker run --rm <image> | less
 #
 # ⚠️ 本镜像**不含任何密钥**，也不执行任何部署动作 —— 它只是脚本的载体。
