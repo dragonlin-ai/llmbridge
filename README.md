@@ -1,16 +1,38 @@
 # LLM 路由中转系统（llmbridge）
 
-> 一个 **OpenAI 兼容的 LLM 网关 + 智能路由**：请求进来先由判定器判断任务类型，
-> 再转发到「最合适且最便宜」的下游大模型，全程可观测、可降级、可对账。
+> 一个 **OpenAI 兼容的 LLM 网关 + 智能路由**：请求进来先由 **Jev 决策模型**判定任务类型与复杂度，
+> 再转发到「最合适且最便宜」的下游大模型 —— 判定发生在首个 token 之前，全程可观测、可降级、可对账。
 
 <p>
   <img alt="python" src="https://img.shields.io/badge/python-3.11%2B-blue">
   <img alt="fastapi" src="https://img.shields.io/badge/FastAPI-0.110%2B-009688">
   <img alt="vue" src="https://img.shields.io/badge/Vue-3.4-42b883">
+  <img alt="decider" src="https://img.shields.io/badge/decider-Jev%20%C2%B7%20TypeSafe%20AI-7c3aed">
   <img alt="license" src="https://img.shields.io/badge/license-Apache--2.0-green">
 </p>
 
 **简体中文** | [English](README_EN.md)
+
+<details>
+<summary><b>目录</b></summary>
+
+- [这是什么 / 不是什么](#这是什么--不是什么)
+- [**决策内核：Jev**](#决策内核jev)
+- [核心特性](#核心特性)
+- [架构](#架构)
+- [技术栈](#技术栈)
+- [部署前必读](#-部署前必读)
+- [部署](#部署)
+- [配置](#配置)
+- [命令行](#命令行)
+- [接口一览](#接口一览)
+- [工具调用边界](#工具调用边界)
+- [项目结构](#项目结构)
+- [文档索引](#文档索引)
+- [已知限制](#已知限制)
+- [许可证](#许可证)
+
+</details>
 
 ---
 
@@ -25,11 +47,114 @@
 
 ---
 
+## 决策内核：Jev
+
+> **「这次该用哪个模型」不是靠关键词表拍脑袋，也不是让一个大模型写段 JSON 再解析 ——
+> 而是交给一个专门做判定的决策模型：Jev。**
+> 判定结果不是文本，是**带校准概率的类型化值**。这是本项目与同类网关最大的区别。
+
+### 一、Jev 是什么
+
+**Jev** 是 [TypeSafe AI](https://typesafe.ai)（旧金山；创始人 Diogo Almeida，前 OpenAI，
+参与过 ChatGPT / RLHF 相关工作）于 **2026-09-15** 发布的 **System One** 决策模型。
+它与「生成式大模型」是**互补**关系，而不是一个更小号的替代品：
+
+| | 常见做法：拿大模型当裁判 | **Jev（本项目所用）** |
+|---|---|---|
+| 工作方式 | 自回归逐 token 生成，再解析 JSON | **非自回归**：一次前向直接给出判定，**不生成任何文本** |
+| 输出 | 一段文字 + 需要二次校验/重试的 JSON | **类型化判定**（选项必然落在给定枚举内）+ **校准过的概率** |
+| 延迟 | 秒级（前沿模型 3～329s 量级） | 官方 **70～500ms**；本项目实测单次 **0.4～1.2s**（含跨网往返） |
+| 置信度可信度 | 编出来的，只能当噪声 | **经 RLCD 训练校准**：说 0.9 就真有约 90% 兑现 → **阈值才真正可用** |
+| 可解释性 | 会附一段自然语言理由 | **不写理由**（这是换来速度与成本所付的代价） |
+| 出错方式 | 可能吐出枚举外的值或格式坏掉 | 类型层面不可能出错，但**选项本身仍可能选错** |
+
+计费口径：输入 **$0.042 / 百万 token**，**输出 token 免费**。
+
+### 二、三种原语（一次请求可并行混问，延迟几乎不增加）
+
+| 原语 | 回答什么 | 返回什么 | 本项目用它判定 |
+|---|---|---|---|
+| **Choice** | 从固定选项里选一个 | `choice` + `probabilities` + `confidence` | `task_type` —— 6 类任务之一 |
+| **Score** | 按 rubric 打分 | `score` + `probabilities` | `complexity` —— 简单 / 中等 / 复杂 |
+| **Noul** | 是 / 否 | `noul`（0～1 概率） | `has_code`、`is_sensitive` |
+
+### 三、本项目怎么用它
+
+**一次调用、并行问 4 个原子问题**（下为 `app/deciders/jev_decider.py` 发出的真实请求体）：
+
+```jsonc
+POST https://api.typesafe.ai/v1/systemone        // Authorization: Bearer $JEV_API_KEY
+{
+  "state": "<用户输入，截断至 1000 字符>",        // 判定输入最小化：不带历史、不带 system
+  "model": "jev-latest",
+  "questions": {
+    "task_type":    { "type": "choice", "criteria": { /* general / code_generation / translation
+                                                        / summarize / complex_reasoning / long_context */ } },
+    "complexity":   { "type": "score",  "criteria": ["简单", "中等", "复杂"] },
+    "has_code":     { "type": "noul" },
+    "is_sensitive": { "type": "noul" }
+  }
+}
+```
+
+拿到 `task_type` + 置信度 + 复杂度 + 两个特征标记之后，**具体调哪个模型由代码层的映射表
+结合成本 / 延迟 / 健康度权重决定**，而不是让 Jev 直接挑模型 id。这样做有三个理由：
+
+1. 模型池怎么增删，都不必改动判定器；
+2. `task_type` 是稳定概念，`model_id` 不是；
+3. 权重与阈值随时可调，且**改动可审计**（改代码，而不是改一段没人看得懂的提示词）。
+
+整条判定链的形状：
+
+```
+用户输入
+   │
+   ├─▶ Jev：一次调用，并行问 4 个原子问题
+   │     task_type(Choice) · complexity(Score) · has_code(Noul) · is_sensitive(Noul)
+   │     └─▶ 类型化判定 + 校准概率（不生成文本，也不给理由）
+   │
+   └─▶ 代码层：task_type → 能力标签映射 × 成本 / 延迟 / 健康度权重
+         └─▶ 具体 model_id（可审计、可回放、可灰度调整）
+```
+
+### 四、为什么这个设计值得关注
+
+1. **判定在首个 token 之前完成** —— 不牺牲首字延迟，也不需要「先答应、再改口」式的重试。
+2. **置信度终于可以当阈值用**：低于 `ROUTE_CONFIDENCE_THRESHOLD_T2` 即走 L3 兜底；
+   每个响应都带 `x-router-*` 元信息头，`request_log` 落库命中层级与 `fallback_reason`。
+3. **失败必留痕**：Jev 不可达 / key 失效 / 返回枚举外值时，一律写 `fallback_reason=DECIDER_*` 并打 warning
+   —— **绝不伪装成「置信度低」**（否则「判定器挂了」与「判定不准」在外部无法区分，排查代价极高）。
+4. **判定器可插拔**：路由层只依赖 `BaseDecider`，内置 `mock`（零依赖、离线可用，**默认**）与 `jev` 两个实现，
+   走同一组契约测试；控制台可在两者间切换，无需改代码。
+5. **概率分布可复盘**：Jev 不给理由，但落库的 `probabilities` 比「编出来的理由」更可信；
+   评测看板可并发跑真实判定器，直接给出准确率与混淆矩阵。
+
+### 五、接入方式与现状（如实说）
+
+| 项 | 值 |
+|---|---|
+| 模型 id | `jev-latest`（2026-09-21 实测回传 `jev-1.13.0`） |
+| 端点 | `POST https://api.typesafe.ai/v1/systemone`，Bearer 鉴权 |
+| 控制台配置 | 「判定器」页 5 项：`JUDGE_PROVIDER` / `JEV_API_KEY` / `JEV_BASE_URL` / `DECIDER_TIMEOUT_MS`（3000ms）/ `ROUTE_CONFIDENCE_THRESHOLD_T2`（0.5）。**库内配置优先于 `.env`，保存即生效** |
+| 连通性自检 | 页面「测试」按钮直接复用真实的 `health_check()` 探活，**不是 mock 自嗨** |
+| 密钥存放 | AES-256-GCM 加密落库，接口不回显明文 |
+
+> **⚠️ 两点请务必知情**
+>
+> 1. **Jev 官方 API 目前未对中国大陆开放**（2026-09-20 报道），且 `api.typesafe.ai` 是境外服务 ——
+>    从境内直连意味着**用户输入出境**的合规问题。本项目默认 `JUDGE_PROVIDER=mock`；
+>    境内生产环境请保持 mock，或按 `BaseDecider` 接口换自建的本地判定模型。
+> 2. **准确率请用自己的评测集实测**：厂商自报约 68%（自设基准、无独立验证），
+>    低于本项目 85% 的验收线。控制台评测看板可直接跑出准确率与混淆矩阵 —— **不要假定，去测**。
+
+---
+
 ## 核心特性
 
 | 能力 | 说明 |
 |---|---|
-| **三层路由** | `L1 规则短路 → L2 判定器（Jev）→ L3 兜底`，判定在首个 token 下发**之前**完成 |
+| **决策内核 · Jev** | 判定由 **Jev（TypeSafe AI System One）** 完成：非自回归、不生成文本、输出**校准概率**，官方 70～500ms → 详见 [决策内核：Jev](#决策内核jev) |
+| **三层路由** | `L1 规则短路 → L2 判定器（[Jev](#决策内核jev)）→ L3 兜底`，判定在首个 token 下发**之前**完成 |
 | **双入口隔离** | `/v1`（对外，OpenAI 兼容，**绝不透出 5xx 裸栈**）与 `/admin`（对内，完整错误信息）永不合流 |
 | **内置厂商目录** | 13 家厂商 / 24 条接入通道 / 55 个模型，**填一个 Key 即接入**，无需手工建模型 |
 | **密钥安全** | 厂商 Key 用 AES-256-GCM 加密落库；对外接口无任何回显 |
@@ -667,7 +792,10 @@ python scripts/build_release.py --no-archive       # 只组装目录，不压 zi
 | `ENCRYPTION_MASTER_KEY` | `dev-only-change-me…` | **生产必改**。厂商 Key 的 AES-256-GCM 主密钥，**丢失不可恢复** |
 | `ALLOW_LOCAL_BASE_URL` | `false` | 是否允许厂商 `base_url` 用 `http://` 与私网地址。**生产必须 false** |
 | `REDIS_URL` | 空 | 留空则不启用缓存 / 限流（自动降级） |
-| `JUDGE_PROVIDER` | `mock` | `mock` = 内置无依赖判定；`jev` = TypeSafe AI 官方 API |
+| `JUDGE_PROVIDER` | `mock` | 判定器选择：`mock` = 内置无依赖判定（离线可用）；`jev` = **Jev 决策模型**（TypeSafe AI 官方 API）。详见 [决策内核：Jev](#决策内核jev) |
+| `JEV_API_KEY` | 空 | Jev 的 API Key。`judge_provider=jev` 时必填；为空会静默退回 mock（看板会提示不一致） |
+| `JEV_BASE_URL` | `https://api.typesafe.ai/v1/systemone` | Jev 端点。**⚠️ 境外服务，境内直连涉及用户输入出境** |
+| `DECIDER_TIMEOUT_MS` | `3000` | 判定器独立超时。实测单次 0.4～1.2s，3000ms 够用 |
 | `ROUTE_CONFIDENCE_THRESHOLD_T2` | `0.5` | L2 置信度阈值，低于此值走 L3 兜底 |
 | `DEFAULT_MODEL_ID` | `1` | 全部候选失败时的最终兜底模型 id。**必须指向模型池里真实存在的 id** |
 | `ENABLE_TOOL_EXECUTION` | `false` | 见「工具调用边界」 |
@@ -803,6 +931,10 @@ llmbridge/
 
 ## 已知限制
 
+- **Jev 官方 API 目前未对中国大陆开放**，且 `api.typesafe.ai` 为境外服务 —— 境内直连存在**用户输入出境**的
+  合规问题。本项目默认 `JUDGE_PROVIDER=mock`；境内生产环境请保持 mock，或按 `BaseDecider` 接口换自建的
+  本地判定模型（详见 [决策内核：Jev](#决策内核jev)）。另：厂商自报判定准确率约 68%，
+  **低于本项目 85% 的验收线**，必须用自己的评测集实测 —— 评测看板可直接跑出准确率与混淆矩阵。
 - **流式请求的 token 用量依赖上游**：若客户端未传 `stream_options.include_usage`，
   部分厂商不回 `usage`，该条日志的 token / 成本会记 0 —— 是「缺数据」，不是「零消耗」。
 - **纯 HTTP 抓取拿不到 JS 渲染站点正文**（仅 `ENABLE_TOOL_EXECUTION=true` 时相关）。

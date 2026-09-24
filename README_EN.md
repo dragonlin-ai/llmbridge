@@ -1,17 +1,40 @@
 # LLM Routing Gateway (llmbridge)
 
 > An **OpenAI-compatible LLM gateway with intelligent routing**: each request is first
-> classified by a decider, then forwarded to the most suitable *and* cheapest downstream
-> model — fully observable, degradable, and auditable.
+> classified by the **Jev decision model** (task type + complexity), then forwarded to the
+> most suitable *and* cheapest downstream model — the decision happens **before the first
+> token is emitted**, and the whole path is observable, degradable, and auditable.
 
 <p>
   <img alt="python" src="https://img.shields.io/badge/python-3.11%2B-blue">
   <img alt="fastapi" src="https://img.shields.io/badge/FastAPI-0.110%2B-009688">
   <img alt="vue" src="https://img.shields.io/badge/Vue-3.4-42b883">
+  <img alt="decider" src="https://img.shields.io/badge/decider-Jev%20%C2%B7%20TypeSafe%20AI-7c3aed">
   <img alt="license" src="https://img.shields.io/badge/license-Apache--2.0-green">
 </p>
 
 [简体中文](README.md) | **English**
+
+<details>
+<summary><b>Contents</b></summary>
+
+- [What this is / what it is not](#what-this-is--what-it-is-not)
+- [**Decision core: Jev**](#decision-core-jev)
+- [Features](#features)
+- [Architecture](#architecture)
+- [Tech stack](#tech-stack)
+- [Read before deploying](#-read-before-deploying)
+- [Deployment](#deployment)
+- [Configuration](#configuration)
+- [CLI](#cli)
+- [API surface](#api-surface)
+- [Tool-calling boundary](#tool-calling-boundary)
+- [Project layout](#project-layout)
+- [Documentation index](#documentation-index)
+- [Known limitations](#known-limitations)
+- [License](#license)
+
+</details>
 
 ---
 
@@ -28,11 +51,127 @@ upstream model are passed straight back to the caller (standard OpenAI semantics
 
 ---
 
+## Decision core: Jev
+
+> **"Which model should serve this request?" is not answered by a keyword table, nor by asking a
+> generation model to write JSON that we then parse — it is answered by a model built specifically
+> for decisions: Jev.**
+> The answer is not text; it is a **typed value with a calibrated probability**. That is the single
+> biggest difference between this gateway and its peers.
+
+### 1. What Jev is
+
+**Jev** is the **System One** decision model released on **2026-09-15** by **TypeSafe AI**
+(San Francisco; founder Diogo Almeida, ex-OpenAI, worked on ChatGPT / RLHF). It **complements**
+a generative model rather than replacing one:
+
+| | The usual approach: an LLM as judge | **Jev (used here)** |
+|---|---|---|
+| How it works | Autoregressive token generation, then JSON parsing | **Non-autoregressive**: one forward pass returns the decision; it **generates no text at all** |
+| Output | Prose plus JSON that needs re-validation or retries | **Typed decisions** (the choice always lands inside the given enum) + **calibrated probabilities** |
+| Latency | Seconds (frontier models, on a 3–329s scale) | **70–500ms** officially; measured here at **0.4–1.2s** per call including the round trip |
+| Is the confidence usable? | Made up — noise, nothing more | **Calibrated through RLCD**: a stated 0.9 really lands about 90% of the time — **so a threshold is finally meaningful** |
+| Explainability | Attaches a natural-language rationale | **No rationale** (that is what buys the speed and the cost) |
+| Failure mode | May emit out-of-enum values or malformed output | Cannot fail at the type level — but **can still pick the wrong option** |
+
+Pricing: **$0.042 per million input tokens**; **output tokens are free**.
+
+### 2. Three primitives (ask them together in one request — latency barely moves)
+
+| Primitive | Answers | Returns | Used here for |
+|---|---|---|---|
+| **Choice** | Pick one of a fixed set | `choice` + `probabilities` + `confidence` | `task_type` — one of 6 task classes |
+| **Score** | Rate against a rubric | `score` + `probabilities` | `complexity` — simple / medium / complex |
+| **Noul** | Yes / no | `noul` (a 0–1 probability) | `has_code`, `is_sensitive` |
+
+### 3. How this project uses it
+
+**One call, four atomic questions in parallel** (the real request body sent by
+`app/deciders/jev_decider.py`):
+
+```jsonc
+POST https://api.typesafe.ai/v1/systemone        // Authorization: Bearer $JEV_API_KEY
+{
+  "state": "<user input, truncated to 1000 chars>", // minimal input: no history, no system prompt
+  "model": "jev-latest",
+  "questions": {
+    "task_type":    { "type": "choice", "criteria": { /* general / code_generation / translation
+                                                        / summarize / complex_reasoning / long_context */ } },
+    "complexity":   { "type": "score",  "criteria": ["simple", "medium", "complex"] },
+    "has_code":     { "type": "noul" },
+    "is_sensitive": { "type": "noul" }
+  }
+}
+```
+
+With `task_type` + confidence + complexity + the two feature flags in hand, **which concrete model
+gets called is decided in code** — a mapping table weighted by cost / latency / health — rather than
+letting Jev pick a `model_id` directly. Three reasons:
+
+1. The model pool can grow or shrink without touching the decider;
+2. `task_type` is a stable concept, `model_id` is not;
+3. Weights and thresholds stay tunable **and auditable** (you change code, not a prompt nobody can read).
+
+The shape of the whole decision chain:
+
+```
+user input
+   │
+   ├─▶ Jev: one call, four atomic questions in parallel
+   │     task_type(Choice) · complexity(Score) · has_code(Noul) · is_sensitive(Noul)
+   │     └─▶ typed decision + calibrated probability (no text, no rationale)
+   │
+   └─▶ in code: task_type → capability-tag mapping × cost / latency / health weights
+         └─▶ a concrete model_id (auditable, replayable, tunable)
+```
+
+### 4. Why the design is worth a closer look
+
+1. **The decision lands before the first token** — no penalty on time-to-first-token, and no
+   "promise first, retract later" retry dance.
+2. **Confidence is usable as a threshold**: below `ROUTE_CONFIDENCE_THRESHOLD_T2` the request takes the
+   L3 fallback. Every response carries `x-router-*` metadata headers, and `request_log` stores the
+   layer that was hit plus `fallback_reason`.
+3. **Failures always leave a trace**: Jev unreachable / key rejected / out-of-enum answer all write
+   `fallback_reason=DECIDER_*` and log a warning — it is **never disguised as "low confidence"**
+   (otherwise "the decider is down" and "the decider guessed wrong" look identical from the outside,
+   and that is brutally expensive to debug).
+4. **The decider is pluggable**: the routing layer depends only on `BaseDecider`. Two implementations
+   ship — `mock` (zero-dependency, offline-capable, **the default**) and `jev` — and they pass the same
+   contract tests. The console switches between them with no code change.
+5. **The probability distribution is replayable**: Jev gives no rationale, but the stored
+   `probabilities` beat a made-up explanation. The evaluation dashboard runs the real decider
+   concurrently and reports accuracy plus a confusion matrix.
+
+### 5. Integration and current status (stated plainly)
+
+| Item | Value |
+|---|---|
+| Model id | `jev-latest` (returned `jev-1.13.0` in a live call on 2026-09-21) |
+| Endpoint | `POST https://api.typesafe.ai/v1/systemone`, Bearer auth |
+| Console settings | 5 fields on the "Decider" page: `JUDGE_PROVIDER` / `JEV_API_KEY` / `JEV_BASE_URL` / `DECIDER_TIMEOUT_MS` (3000 ms) / `ROUTE_CONFIDENCE_THRESHOLD_T2` (0.5). **Database settings override `.env` and take effect on save** |
+| Connectivity check | The "Test" button reuses the real `health_check()` — it is **not mock talking to itself** |
+| Key storage | AES-256-GCM encrypted at rest; never echoed back through an API |
+
+> **⚠️ Two things you must know**
+>
+> 1. **Jev's public API is not yet available in mainland China** (reported 2026-09-20), and
+>    `api.typesafe.ai` is an offshore service — connecting from inside mainland China means
+>    **user input leaves the country**, which is a compliance question. This project defaults to
+>    `JUDGE_PROVIDER=mock`; for production inside mainland China, keep mock or implement a local
+>    decider behind the `BaseDecider` interface.
+> 2. **Measure accuracy against your own eval set.** The vendor self-reports ~68% (its own benchmark,
+>    no independent verification), which is **below this project's 85% acceptance bar**. The console's
+>    evaluation dashboard reports accuracy and a confusion matrix directly — **do not assume; measure**.
+
+---
+
 ## Features
 
 | Capability | Description |
 |---|---|
-| **Three-layer routing** | `L1 rule short-circuit → L2 decider (Jev) → L3 fallback`; the decision is made **before** the first token is emitted |
+| **Decision core · Jev** | Decisions are made by **Jev (TypeSafe AI System One)**: non-autoregressive, generates no text, returns **calibrated probabilities**, 70–500 ms officially → see [Decision core: Jev](#decision-core-jev) |
+| **Three-layer routing** | `L1 rule short-circuit → L2 decider ([Jev](#decision-core-jev)) → L3 fallback`; the decision is made **before** the first token is emitted |
 | **Isolated entrypoints** | `/v1` (public, OpenAI-compatible, **never leaks 5xx stack traces**) and `/admin` (internal, full error detail) are kept strictly apart |
 | **Built-in vendor catalog** | 13 vendors / 24 access channels / 55 models — **add one API key and you're connected**, no manual model setup |
 | **Key security** | Vendor keys are stored AES-256-GCM encrypted; no secret is ever echoed back through a public endpoint |
@@ -713,7 +852,10 @@ The ones that matter most:
 | `ENCRYPTION_MASTER_KEY` | `dev-only-change-me…` | **Change in production.** AES-256-GCM master key for vendor keys — **unrecoverable if lost** |
 | `ALLOW_LOCAL_BASE_URL` | `false` | Allow vendor `base_url` over `http://` and private hosts. **Must be false in production** |
 | `REDIS_URL` | empty | Leave empty to disable cache / rate limiting (graceful degradation) |
-| `JUDGE_PROVIDER` | `mock` | `mock` = built-in dependency-free decider; `jev` = TypeSafe AI API |
+| `JUDGE_PROVIDER` | `mock` | Which decider to use: `mock` = built-in dependency-free decider (works offline); `jev` = the **Jev decision model** (TypeSafe AI's official API). See [Decision core: Jev](#decision-core-jev) |
+| `JEV_API_KEY` | empty | API key for Jev. Required when `judge_provider=jev`; when empty the gateway silently falls back to mock (the dashboard flags the mismatch) |
+| `JEV_BASE_URL` | `https://api.typesafe.ai/v1/systemone` | Jev endpoint. **⚠️ Offshore service — connecting from mainland China sends user input abroad** |
+| `DECIDER_TIMEOUT_MS` | `3000` | Decider timeout. Measured at 0.4–1.2 s per call, so 3000 ms is comfortable |
 | `ROUTE_CONFIDENCE_THRESHOLD_T2` | `0.5` | L2 confidence threshold; below this the request falls back to L3 |
 | `DEFAULT_MODEL_ID` | `1` | Final fallback model id when all candidates fail. **Must be a real id from the model pool** |
 | `ENABLE_TOOL_EXECUTION` | `false` | See "Tool-calling boundary" |
@@ -850,6 +992,13 @@ llmbridge/
 
 ## Known limitations
 
+- **Jev's official API is not available in mainland China yet**, and `api.typesafe.ai` is an offshore
+  service — connecting from there means **user input leaves the country**, which is a compliance
+  question. This project defaults to `JUDGE_PROVIDER=mock`; for production inside mainland China keep
+  mock, or implement a local decider behind the `BaseDecider` interface (see
+  [Decision core: Jev](#decision-core-jev)). Also: the vendor self-reports ~68% decision accuracy,
+  **below this project's 85% acceptance bar** — measure it on your own eval set; the console reports
+  accuracy and a confusion matrix directly.
 - **Streaming token usage depends on the upstream**: if the client does not send
   `stream_options.include_usage`, some vendors omit `usage`, and that log row records 0 tokens /
   0 cost — that is *missing data*, not *zero consumption*.
