@@ -275,8 +275,7 @@ Four options — pick the one that matches your environment:
 | Option | Best for | Prerequisites | In one line |
 |---|---|---|---|
 | **1 · Script install** (recommended) | Production on a Linux server | Linux + Python 3.11+ | one `curl` |
-| **2 · Docker Compose** (recommended) | Production anywhere, minimal host setup | Docker + Compose v2, registry access | **one `docker run` pulls images from the cloud — no source, no local build** |
-| └ Form A · build from source (optional) | You have the repo and will change code | same as above, plus `github.com` access | `bash deploy/docker-deploy.sh --source` |
+| **2 · Docker Compose** (recommended) | Production anywhere, minimal host setup | Docker + Compose v2, registry access | **one `docker run` installs everything** |
 | **3 · Apple container** | Local development / trial on Apple Silicon | macOS 26+ and `container` 1.1.0+ | three subcommands |
 | **4 · Build from source** | Customization, offline delivery | Python 3.11+ / Node.js 20+ | see below |
 
@@ -411,21 +410,7 @@ journalctl -u llmbridge -f          # live logs
 
 ### Option 2: Docker Compose (recommended)
 
-The default form is **pull images from the cloud**: no source code, no local build, no Node.js —
-the target host only needs **Docker + Compose v2** and registry access (defaults to Aliyun
-ACR; `--registry` can point at any third-party registry). One command brings up
-**api + PostgreSQL + Redis + Nginx** (four containers).
-
-(If you already **have the source** and want to rebuild after changing code, add `--source`
-to use "Form A · build from source" at the end of this section.)
-
-#### Prerequisites
-
-- Docker Engine 20.10+ (or Docker Desktop), daemon running
-- Docker Compose **v2** (the `docker compose` subcommand form)
-- Registry access (default `registry.cn-hangzhou.aliyuncs.com/winyeahs`; `--registry` to use any third-party registry)
-
-#### Quick start (cloud pull, recommended)
+**One command installs everything** — no source code, no local build:
 
 ```bash
 docker run --rm --entrypoint cat \
@@ -433,314 +418,35 @@ docker run --rm --entrypoint cat \
   /opt/llmbridge/deploy/docker-deploy.sh | bash -s --
 ```
 
-That is all. It writes the compose file, generates `.env` (random `JWT_SECRET` /
-`ENCRYPTION_MASTER_KEY` / `POSTGRES_PASSWORD`), runs `compose pull`, then `compose up -d`,
-polls `/health` until ready, and prints the console URL and default account.
+The script writes the compose file → generates `.env` → pulls the images → starts the
+containers → waits for the health check → prints the URL.
 
-Equivalent to explicitly adding `--image` — `--image` is now the default behavior and can be
-omitted. `--entrypoint cat` is required: the api image's default entrypoint initializes the
-database before starting the server; the script is piped into the **target host's own bash** —
-the container performs no deployment action.
+Then open `http://<server-ip>:8081/` and log in with `admin / admin123`.
 
-> **This command makes zero GitHub requests**: both the script and the images come from the
-> registry, so it is also the recommended path for target hosts in mainland China.
+Two prerequisites only: Docker installed (with `docker compose` v2), and access to the
+registry. **No Node.js, no GitHub, no source code needed.**
 
-Common variants (record the pipe once, reuse it for every subcommand):
+Common commands (record the pipe once; run them from the same directory):
 
 ```bash
 LB='docker run --rm --entrypoint cat registry.cn-hangzhou.aliyuncs.com/winyeahs/llmbridge-api:1.0.0 /opt/llmbridge/deploy/docker-deploy.sh'
 
-$LB | bash -s -- --port 8080              # console port (default 8081)
-$LB | bash -s -- --dir /srv/llmbridge     # deploy directory
-$LB | bash -s -- --tag 1.0.0-<git-short-sha>  # pin an immutable tag (recommended for prod)
-$LB | bash -s -- status                   # status + health check (api image already local, offline)
-$LB | bash -s -- logs api                 # follow one service's logs
-$LB | bash -s -- down                     # stop (volumes preserved)
-$LB > docker-deploy.sh                    # write the script out, review before running
+$LB | bash -s -- status        # status + health check
+$LB | bash -s -- logs api      # follow one service's logs
+$LB | bash -s -- down          # stop (volumes preserved)
+$LB | bash -s -- upgrade       # upgrade (set LLMBRIDGE_TAG in .env first)
+$LB | bash -s -- --port 8090   # different public port (default 8081)
 ```
 
-> Run subcommands from the same directory (the default deploy directory is `./llmbridge`, like
-> `docker compose`). To review the script first: `$LB > docker-deploy.sh`, then
-> `bash docker-deploy.sh --help`.
-
-**Switching registries (any third-party registry besides Aliyun)**: use
-`--registry <host>/<namespace>`; the script builds the `llmbridge-api` / `llmbridge-web`
-image references and pulls from that address:
-
-```bash
-docker run --rm --entrypoint cat \
-  <third-party-registry-host>/<namespace>/llmbridge-api:1.0.0 \
-  /opt/llmbridge/deploy/docker-deploy.sh | bash -s -- --registry <third-party-registry-host>/<namespace>
-```
-
-Private registry: any of the forms above can pass `REGISTRY_USER` / `REGISTRY_PASSWORD`;
-the script logs in automatically before pulling (`--password-stdin`, nothing written to disk):
-
-```bash
-REGISTRY_USER=<account> REGISTRY_PASSWORD=<password> bash docker-deploy.sh --registry <host>/<namespace>
-```
-
-**Lighter option** (optional): a separate ~8 MB installer image, `llmbridge-deploy`, prints
-the same script. It requires **that repository to be public** in the registry — a fresh Aliyun
-ACR repository is private by default, whose anonymous token carries no pull permission (401).
-After switching it public (console → Container Registry → namespace → repository → edit):
-
-```bash
-docker run --rm registry.cn-hangzhou.aliyuncs.com/winyeahs/llmbridge-deploy:1.0.0 \
-  | bash -s --
-```
-
-(If you would rather not touch that setting, ignore this — the api-image command above runs the
-same script.)
-
-##### Publish the images (publisher side, once)
-
-```bash
-# Log in to the registry (docker reads the password itself; no script and no file sees it)
-docker login --username=<your-account> registry.cn-hangzhou.aliyuncs.com
-
-# Build and push api + web + deploy (defaults to linux/amd64,linux/arm64)
-bash deploy/publish-image.sh --tag 1.0.0
-
-# x86-only fleets: pin a single platform (cross-arch builds run under QEMU and are slower)
-bash deploy/publish-image.sh --tag 1.0.0 --platform linux/amd64
-
-# Print the exact commands without running them
-bash deploy/publish-image.sh --tag 1.0.0 --dry-run
-```
-
-The script tags each image twice: `1.0.0` and `1.0.0-<git-short-sha>`. The former can be
-overwritten by a later push; **the latter is immutable** — that is what lets you get back
-to the exact revision you shipped (prefer it, or a digest, in production).
-
-It pushes to `registry.cn-hangzhou.aliyuncs.com/winyeahs/` by default; override it:
-
-```bash
-bash deploy/publish-image.sh --registry registry.cn-hangzhou.aliyuncs.com/<your-namespace> --tag 1.0.0
-```
-
-> ⚠️ Never put the registry password into a script, `.env`, or the repo — a plaintext
-> credential in a repository is a public credential. For CI, pass `REGISTRY_USER` /
-> `REGISTRY_PASSWORD` as environment variables (the script feeds them to
-> `docker login --password-stdin`), or use a short-lived registry token.
->
-> ⚠️ The `docker-container` BuildKit driver does **not** read the host's `daemon.json`,
-> so a host that can `docker pull python:3.13-slim` is not automatically able to build.
-> Behind a restricted network, builds die fetching base-image metadata
-> (`auth.docker.io ... Bad Gateway`). The script writes
-> `~/.docker/buildx/llmbridge-buildkitd.toml` with `docker.io` mirrors for the builder
-> and recreates it when the config changes. Override with
-> `LLMBRIDGE_REGISTRY_MIRRORS="https://a,https://b" bash deploy/publish-image.sh`.
-
-#### What's in the images
-
-The three images in the registry make up the complete delivery; the target host needs no
-source code and performs no local build:
-
-| Image | Contents |
-|---|---|
-| `llmbridge-api` | Backend (FastAPI + routing engine + migration scripts) + **the install script** (`/opt/llmbridge/deploy/`) |
-| `llmbridge-web` | nginx + the built frontend `dist` and `nginx.conf` baked in |
-| `llmbridge-deploy` | **Installer** (optional): no application code, just that one install script (~8 MB) |
-
-> **Why the install script travels inside an image**: the script itself has to reach the
-> target host first, and `raw.githubusercontent.com` is unreachable from mainland China —
-> `curl ... | bash` simply cannot work there. The registry is the one address a target host
-> is guaranteed to reach (it has to pull the application images from it anyway), so the
-> script ships inside the api image; and since the install then pulls that very same image,
-> **fetching the script costs no extra bytes**.
-
-#### Deploy directory and manual equivalent
-
-The deploy directory ends up holding just two things: the compose file and `.env`:
-
-```text
-llmbridge/
-├── .env
-└── deploy/docker-compose.image.yml
-```
-
-Manual equivalent (run from the root of the deploy directory):
-
-```bash
-docker compose --env-file ./.env -f deploy/docker-compose.image.yml pull
-docker compose --env-file ./.env -f deploy/docker-compose.image.yml up -d
-```
-
-> `--env-file ./.env` is required here too: `.env` sits at the deploy-directory root while
-> the compose file lives in `deploy/`, so Compose would otherwise look for `deploy/.env`.
-> (The install script passes the flag itself, so the one-command path is unaffected.)
-
-#### Access
-
-Open `http://<server-ip>:<HTTP_PORT>/` (`HTTP_PORT` defaults to 8081) and log in with
-`admin / admin123`. The public API lives at the same entrypoint:
-`http://<ip>:<HTTP_PORT>/v1/chat/completions`.
-
-#### Upgrade and roll back
-
-Upgrade: change `LLMBRIDGE_TAG` in `.env` to the new version (prefer the immutable
-`1.0.0-<git-short-sha>` tag), then pull and bring the stack up:
-
-```bash
-sed -i 's/^LLMBRIDGE_TAG=.*/LLMBRIDGE_TAG=1.0.1/' .env
-docker compose --env-file ./.env -f deploy/docker-compose.image.yml pull
-docker compose --env-file ./.env -f deploy/docker-compose.image.yml up -d
-```
-
-Roll back: set `LLMBRIDGE_TAG` back to the previous immutable tag and rerun the two lines
-above. Data volumes are untouched; no database change is needed.
-
-#### Data and migration
-
-PostgreSQL and Redis data live in Docker **named volumes** (`llmbridge_pgdata` /
-`llmbridge_redisdata`); recreating containers does not lose data. Moving to a new machine:
-
-```bash
-# Source server
-docker compose --env-file ./.env -f deploy/docker-compose.image.yml stop
-docker run --rm -v llmbridge_pgdata:/data -v "$PWD":/backup alpine \
-  tar czf /backup/pgdata.tar.gz -C /data .
-
-# New server: restore into the same volume, then bring the stack up
-docker volume create llmbridge_pgdata
-docker run --rm -v llmbridge_pgdata:/data -v "$PWD":/backup alpine \
-  tar xzf /backup/pgdata.tar.gz -C /data
-```
-
-For the SQLite forms (Option 1 default, Option 3 default), just copy `<data dir>/llmbridge.db`.
-
-#### Troubleshooting
-
-- **`pull` reports no such manifest**: confirm the tag was published (the publish script
-  prints digests at the end; `docker manifest inspect <image>:<tag>` also works) and that
-  the target host's architecture is among the published platforms.
-- **Console is 404 / blank**: in the cloud-pull form the `dist` lives inside the
-  `llmbridge-web` image, so "forgot to build the frontend" cannot happen. Check that the
-  `web` container is up.
-- **`exec format error`**: image architecture does not match the host (e.g. arm64 image on
-  x86). Re-publish with the right `--platform`, or produce amd64 and arm64 together.
-
-#### Form A: build from source (optional)
-
-If you already **have the source** and want to rebuild after changing code (instead of
-pulling ready-made images from the registry), add `--source` to use this form. **Images are
-built on the target host**, and the frontend `dist` is bind-mounted into nginx — so the target
-host must either hold the source tree or be able to reach GitHub (the script downloads it).
-
-Prerequisites: same as the cloud-pull form (Docker + Compose v2); if you do not have the
-source locally, the host also needs `github.com` access.
-
-Quick start (inside a repo, using the current source):
-
-```bash
-bash deploy/docker-deploy.sh --source
-```
-
-Or download the source from any machine and build locally:
-
-```bash
-curl -sSL https://raw.githubusercontent.com/dragonlin-ai/llmbridge/main/deploy/docker-deploy.sh | bash -s -- --source
-```
-
-The script downloads the source into `./llmbridge`, generates `.env` with random
-`JWT_SECRET` / `ENCRYPTION_MASTER_KEY` / `POSTGRES_PASSWORD`, builds the frontend with a
-`node:22-alpine` container, runs `docker compose up -d --build`, polls `/health` until ready,
-and prints the access URL.
-
-> ⚠️ This path needs `github.com` to be reachable (it downloads both the script and the
-> source). **From mainland China, or whenever the target host should not touch GitHub, use
-> the cloud-pull form above** — that path makes no GitHub request at all.
-
-Options and subcommands (Form A):
-
-```bash
-bash deploy/docker-deploy.sh --source --port 8080     # console port (default 8081)
-bash deploy/docker-deploy.sh --source --dir /srv/llmbridge
-bash deploy/docker-deploy.sh --source --skip-frontend # when admin-web/dist already exists
-bash deploy/docker-deploy.sh --source status          # container status + health check
-bash deploy/docker-deploy.sh --source logs api        # follow one service's logs
-bash deploy/docker-deploy.sh --source upgrade         # pull + rebuild + restart (data preserved)
-bash deploy/docker-deploy.sh --source down            # stop (volumes preserved)
-bash deploy/docker-deploy.sh --source purge           # stop and **delete volumes** (irreversible)
-```
-
-Manual deployment (Form A):
-
-```bash
-# 1) Get the code
-git clone https://github.com/dragonlin-ai/llmbridge.git
-cd llmbridge
-
-# 2) Configure (change three things in production)
-cp .env.example .env
-#   JWT_SECRET / ENCRYPTION_MASTER_KEY — generate random values
-#     python -c "import secrets;print(secrets.token_urlsafe(32))"
-#     openssl rand -base64 32
-#   POSTGRES_PASSWORD — must match the password inside DATABASE_URL
-#   HTTP_PORT — public console port (default 8081)
-
-# 3) Build the frontend (nginx bind-mounts admin-web/dist; without it the console is blank)
-cd admin-web && npm ci && npm run build && cd ..
-
-# 4) Bring up the stack
-docker compose --env-file ./.env -f deploy/docker-compose.yml up -d --build
-```
-
-> ⚠️ **`--env-file ./.env` is not optional.** As soon as `-f` points at the `deploy/`
-> subdirectory, Compose looks for `.env` **in the directory holding the compose file**
-> (`deploy/.env`) when performing **variable interpolation** — the repo-root `.env` is
-> invisible to it, and you get
-> `required variable POSTGRES_PASSWORD is missing a value`.
-> Note that `env_file: ../.env` inside `docker-compose.yml` only sets the **container's**
-> environment; it does not affect Compose's own interpolation.
-> **Every `docker compose -f deploy/...` command below is the same.**
-
-Generating secrets:
-
-```bash
-python -c "import secrets;print(secrets.token_urlsafe(32))"   # JWT_SECRET
-openssl rand -base64 32                                        # ENCRYPTION_MASTER_KEY
-openssl rand -base64 24 | tr -d '/+='                          # POSTGRES_PASSWORD
-```
-
-> ⚠️ The `127.0.0.1` host in `.env`'s `DATABASE_URL` is for running the backend directly on
-> the host. Compose overrides it with the service name `db` — no manual edit needed.
-
-Upgrade (Form A):
-
-```bash
-git pull
-cd admin-web && npm ci && npm run build && cd ..
-docker compose --env-file ./.env -f deploy/docker-compose.yml up -d --build
-```
-
-> `--build` is required: the frontend `dist/` is bind-mounted into nginx, so
-> **frontend changes need a rebuild — restarting the container is not enough.**
-
-Useful commands (Form A):
-
-```bash
-docker compose --env-file ./.env -f deploy/docker-compose.yml ps               # status
-docker compose --env-file ./.env -f deploy/docker-compose.yml logs -f api      # backend logs
-docker compose --env-file ./.env -f deploy/docker-compose.yml restart api      # restart backend
-docker compose --env-file ./.env -f deploy/docker-compose.yml down             # stop (volumes preserved)
-docker compose --env-file ./.env -f deploy/docker-compose.yml down -v          # stop and delete data (dangerous)
-```
-
-#### Switching between Form A and the cloud-pull form
-
-Both compose files share the project name `llmbridge`, so they **share the same data
-volumes** (`llmbridge_pgdata` / `llmbridge_redisdata`) — switching forms does not lose data.
-But the service names differ (Form A has `nginx`, the cloud-pull form has `web`), so stop
-first:
-
-```bash
-docker compose --env-file ./.env -f deploy/docker-compose.yml down       # before switching A → cloud-pull
-docker compose --env-file ./.env -f deploy/docker-compose.image.yml up -d
-```
-
-An `orphan containers` warning during the next up usually means this step was skipped.
+Switching registry (any third-party registry besides Aliyun): add
+`--registry <host>/<namespace>`; for a private registry also pass
+`REGISTRY_USER=<account> REGISTRY_PASSWORD=<password>` (auto login before pull,
+credentials never touch disk).
+
+> Upgrade/rollback, data migration, troubleshooting, publishing images, and the
+> "build from source" form are in
+> [`05-安装打包说明.md`](docs/阶段五-部署与交付/05-安装打包说明.md) §6.1 (Chinese) and
+> [`01-部署文档.md`](docs/阶段五-部署与交付/01-部署文档.md).
 
 ---
 ### Option 3: Apple container (macOS)
@@ -1023,13 +729,13 @@ llmbridge/
 ├── scripts/                  Idempotent ops scripts (catalog / migrations / release build / delivery checks)
 ├── deploy/                   Deployment assets
 │   ├── install.sh            ★ Option 1: Linux one-shot install (systemd)
-│   ├── docker-deploy.sh      ★ Option 2: Docker Compose one-shot deploy (default cloud pull; `--source` for local source build)
+│   ├── docker-deploy.sh      ★ Option 2: Docker Compose one-shot deploy (cloud pull from registry)
 │   ├── publish-image.sh      ★ Publisher side of Form B: build and push the api + web + deploy images
 │   ├── apple-container.sh    ★ Option 3: macOS Apple container
 │   ├── Dockerfile            Backend image
 │   ├── Dockerfile.web        Frontend image (nginx + dist and nginx.conf baked in)
 │   ├── Dockerfile.deploy     Installer image (prints docker-deploy.sh only, ~8 MB)
-│   ├── docker-compose.yml    Orchestration (api / db / redis / nginx) · Form A, builds locally
+│   ├── docker-compose.yml    Orchestration (api / db / redis / nginx) · source form, builds locally
 │   ├── docker-compose.image.yml  Orchestration (api / db / redis / web) · Form B, no build stage
 │   ├── nginx.conf            Reverse proxy for the Compose form (SSE-critical; baked into the web image)
 │   ├── nginx-standalone.conf Site-config template for the bare-metal form
