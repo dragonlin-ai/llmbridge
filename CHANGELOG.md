@@ -20,6 +20,11 @@
   原先表里只有 `JUDGE_PROVIDER` 与 `ROUTE_CONFIDENCE_THRESHOLD_T2`。
 - **可读性**：顶部加 `decider` 徽章与**折叠目录**（中英各 15 个锚点，已逐一核验可命中标题）；
   核心特性表首行改为「决策内核 · Jev」并给 Jev 加交叉链接。
+- **顶部版式居中**：标题 / 简介 / 徽章 / 语言切换四块用 `<div align="center">` 包住居中。
+  实现要点：GitHub 的 HTML 块**在空行处结束**，所以 `<div>` 之后必须留一个空行，块内的
+  Markdown（`#` 标题、`>` 引用块）才会被照常解析 —— 标题保持 Markdown 标题形态，**锚点不受影响**
+  （换成裸 `<h1>` 反而会丢锚点）。已用 **GitHub 官方 GFM 渲染接口** `POST /markdown` 核对真实输出：
+  `<div align="center" dir="auto">` / `<h1 dir="auto">` / `<blockquote>` 均正常，四块都在 `</div>` 之内。
 - **口径说明**：README 是**对外介绍页**，本轮只改文字与版式，**未动任何接口、表结构或判定口径**。
 
 ### 一条命令安装：镜像与脚本都从阿里云容器库取，不再依赖 GitHub

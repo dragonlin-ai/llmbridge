@@ -1,3 +1,7 @@
+<!-- 顶部四块（标题 / 简介 / 徽章 / 语言切换）居中：GitHub 的 HTML 块在空行处结束，
+     因此 <div> 内部的 Markdown 仍会被正常解析，标题锚点不受影响。 -->
+<div align="center">
+
 # LLM 路由中转系统（llmbridge）
 
 > 一个 **OpenAI 兼容的 LLM 网关 + 智能路由**：请求进来先由 **Jev 决策模型**判定任务类型与复杂度，
@@ -12,6 +16,8 @@
 </p>
 
 **简体中文** | [English](README_EN.md)
+
+</div>
 
 <details>
 <summary><b>目录</b></summary>

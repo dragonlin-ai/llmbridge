@@ -1,3 +1,8 @@
+<!-- The four top blocks (title / intro / badges / language switch) are centred: a GitHub HTML
+     block ends at a blank line, so the Markdown inside <div> is still parsed and heading
+     anchors are unaffected. -->
+<div align="center">
+
 # LLM Routing Gateway (llmbridge)
 
 > An **OpenAI-compatible LLM gateway with intelligent routing**: each request is first
@@ -14,6 +19,8 @@
 </p>
 
 [简体中文](README.md) | **English**
+
+</div>
 
 <details>
 <summary><b>Contents</b></summary>
