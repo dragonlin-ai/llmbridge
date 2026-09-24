@@ -21,7 +21,8 @@
 #    --with-models      预置厂商目录时一并灌入参考模型（默认只铺接入通道）
 #    --skip-frontend    不构建控制台前端（仅后端；界面需自行备好 admin-web/dist）
 #    --frontend-only    只构建控制台前端后退出（补装 Node.js 后可单独跑这一步）
-#    --nginx-port <n>   Nginx 对外端口（默认 80，仅用于生成站点配置）
+#    --nginx-port <n>   Nginx 对外端口（默认 80）
+#    --no-nginx         不自动安装 / 配置系统 Nginx（改用你已有的 web 服务器）
 #    --no-service       只铺代码与虚拟环境，不安装/启动 systemd 服务
 #    --uninstall        卸载（保留数据目录）
 #    --purge            卸载并**删除**安装目录与数据（不可恢复，二次确认）
@@ -40,8 +41,11 @@
 #     绝不静默跳过，否则现象是「服务正常、浏览器打开一片空白」，极难归因。
 #
 #  2) 必须有一个 web 服务器把 dist 托起来并把 /v1、/admin 反代到后端。
-#     本脚本会生成一份可直接使用的 Nginx 站点配置（省略了手工写 SSE 相关配置的坑），
-#     启用命令见安装结束时的输出。Docker Compose 形态里这个角色由 nginx 容器担任。
+#     本脚本**把这件事一次做到底**：没装 Nginx 就自动装（apt/dnf/yum/zypper/apk），
+#     装好即写入站点配置、处理「发行版自带默认站点抢 80」、放行 SELinux 与防火墙，
+#     最后直接打印控制台地址 —— 装完不需要你再手工敲任何命令。
+#     Docker Compose 形态里这个角色由 nginx 容器担任。
+#     若你有自己的 web 服务器、或不愿让脚本改动系统 Nginx，加 --no-nginx 跳过这一步。
 #
 #  为什么默认用 SQLite：
 #    一键安装的第一要义是「装完就能打开界面」。默认模板里的 PostgreSQL 连接串
@@ -75,8 +79,11 @@ ASSUME_YES="false"
 SKIP_FRONTEND="false"
 FRONTEND_ONLY="false"
 NGINX_PORT="80"
+NO_NGINX="false"             # --no-nginx：不自动装/配 Nginx
 FRONTEND_OK="false"          # 由 build_frontend 置位，供结束摘要判断怎么提示
 NGINX_CONF_READY="false"     # 由 write_nginx_conf 置位
+NGINX_READY="false"          # 由 ensure_nginx 置位：站点真的对外可用了
+NGINX_URL=""                 # 控制台访问地址（只有装成功才有值）
 ACTION="install"
 
 # ---- 输出工具（颜色在非 TTY 时自动关闭，避免污染管道）----
@@ -132,6 +139,7 @@ while [ $# -gt 0 ]; do
         --skip-frontend) SKIP_FRONTEND="true"; shift ;;
         --frontend-only) FRONTEND_ONLY="true"; shift ;;
         --nginx-port) NGINX_PORT="${2:?--nginx-port 需要参数}"; shift 2 ;;
+        --no-nginx)   NO_NGINX="true"; shift ;;
         --no-service) NO_SERVICE="true"; shift ;;
         --uninstall)  ACTION="uninstall"; shift ;;
         --purge)      ACTION="uninstall"; PURGE="true"; shift ;;
@@ -509,6 +517,224 @@ write_nginx_conf() {
 }
 
 # =============================================================================
+#  Nginx：自动装 + 置配置 + 放行（「一键装完就能打开界面」的关键一步）
+# =============================================================================
+
+pick_nginx_conf_dir() {
+    # 站点配置目录各发行版不同：Debian / RHEL 系是 conf.d，Alpine 是 http.d。
+    # 以「目录存在」为准即可 —— 装出来的包一定已在主配置里 include 了它。
+    local d
+    for d in /etc/nginx/conf.d /etc/nginx/http.d; do
+        if [ -d "$d" ]; then
+            printf '%s' "$d"
+            return 0
+        fi
+    done
+    printf '/etc/nginx/conf.d'
+}
+
+install_nginx_pkg() {
+    info "未检测到 Nginx，自动安装 ..."
+    if command -v apt-get >/dev/null 2>&1; then
+        DEBIAN_FRONTEND=noninteractive apt-get update -qq >/dev/null 2>&1 || true
+        DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nginx
+    elif command -v dnf >/dev/null 2>&1; then
+        dnf install -y nginx
+    elif command -v yum >/dev/null 2>&1; then
+        yum install -y nginx
+    elif command -v zypper >/dev/null 2>&1; then
+        zypper --non-interactive install nginx
+    elif command -v apk >/dev/null 2>&1; then
+        apk add --no-cache nginx
+    else
+        return 1
+    fi
+}
+
+nginx_disable_default_sites() {
+    # 发行版自带的默认站点占着 `<端口> default_server`，而本站点的 server_name 是 `_`
+    # （不匹配任何真实 Host），抢不到「默认」位 —— 现象是 `nginx -t` 通过、访问 IP 却是
+    # 欢迎页、反代完全没走。这一步是「装完就能用」的必要条件。
+    local f
+    # Debian/Ubuntu：sites-enabled/default 只是指向 sites-available/default 的软链，
+    # 移走安全且可逆（改名 .disabled-by-llmbridge 保留）。
+    for f in /etc/nginx/sites-enabled/default /etc/nginx/conf.d/default.conf; do
+        if [ -e "$f" ] && ! grep -q 'llmbridge' "$f" 2>/dev/null; then
+            if mv -f "$f" "$f.disabled-by-llmbridge" 2>/dev/null; then
+                info "已移走发行版默认站点：$f（否则它会抢走默认 server）"
+            fi
+        fi
+    done
+    # RHEL 系：默认 server 块直接写在 nginx.conf 里，移不走，只能摘掉 default_server 标记。
+    # 摘掉后 conf.d 的 include 位于该块之前，本站点自然成为默认 server。幂等，改前留备份。
+    if [ -f /etc/nginx/nginx.conf ] && grep -q 'default_server' /etc/nginx/nginx.conf 2>/dev/null; then
+        cp -a /etc/nginx/nginx.conf /etc/nginx/nginx.conf.llmbridge.bak 2>/dev/null || true
+        sed -i -E 's#^([[:space:]]*listen[[:space:]]+[0-9a-fA-F.:\[\]]+[[:space:]]+)default_server;#\1;#' \
+            /etc/nginx/nginx.conf 2>/dev/null || true
+        info "已摘掉 nginx.conf 中默认 server 的 default_server 标记（备份 nginx.conf.llmbridge.bak）"
+    fi
+}
+
+nginx_fix_selinux() {
+    command -v getenforce >/dev/null 2>&1 || return 0
+    if [ "$(getenforce 2>/dev/null || echo Disabled)" != "Enforcing" ]; then
+        return 0
+    fi
+    info "SELinux 处于 Enforcing，放行 Nginx 所需权限 ..."
+    # 反代到 127.0.0.1 需要这条，否则请求一律 502（配置看着完全正常，极难归因）。
+    if ! setsebool -P httpd_can_network_connect 1 2>/dev/null; then
+        warn "setsebool 失败：反代后端可能 502。请手工执行：setsebool -P httpd_can_network_connect 1"
+    fi
+    # 非标准端口：SELinux 默认不允许 nginx 绑定，需登记进 http_port_t。
+    case "$NGINX_PORT" in
+        80|443|8080) ;;
+        *)
+            if command -v semanage >/dev/null 2>&1; then
+                semanage port -a -t http_port_t -p tcp "$NGINX_PORT" 2>/dev/null || \
+                    semanage port -m -t http_port_t -p tcp "$NGINX_PORT" 2>/dev/null || true
+            else
+                warn "端口 $NGINX_PORT 可能被 SELinux 拦下（需 semanage port -a -t http_port_t -p tcp $NGINX_PORT）"
+            fi
+            ;;
+    esac
+    # 静态产物在 $INSTALL_DIR（非标准 web 目录），默认上下文不许 httpd 读 → 403。
+    if [ -d "$INSTALL_DIR/admin-web/dist" ] && command -v chcon >/dev/null 2>&1; then
+        chcon -R -t httpd_sys_content_t "$INSTALL_DIR/admin-web/dist" 2>/dev/null || true
+    fi
+}
+
+nginx_open_firewall() {
+    local port="$1"
+    if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
+        firewall-cmd --permanent --add-port="${port}/tcp" >/dev/null 2>&1 || true
+        if firewall-cmd --reload >/dev/null 2>&1; then
+            ok "防火墙已放行 ${port}/tcp（firewalld）"
+        fi
+    elif command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: active'; then
+        if ufw allow "${port}/tcp" >/dev/null 2>&1; then
+            ok "防火墙已放行 ${port}/tcp（ufw）"
+        fi
+    else
+        info "未检测到启用中的 firewalld / ufw —— 若为云服务器，请在控制台安全组放行 ${port} 端口"
+    fi
+}
+
+nginx_start_or_reload() {
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl enable nginx >/dev/null 2>&1 || true
+        if ! systemctl reload nginx >/dev/null 2>&1; then
+            systemctl restart nginx >/dev/null 2>&1 || true
+        fi
+        if ! systemctl is-active nginx >/dev/null 2>&1; then
+            warn "Nginx 未能启动。排查：journalctl -u nginx -n 50"
+            return 1
+        fi
+    elif command -v rc-service >/dev/null 2>&1; then
+        # Alpine
+        rc-update add nginx default >/dev/null 2>&1 || true
+        rc-service nginx restart >/dev/null 2>&1 || true
+    else
+        nginx -s reload >/dev/null 2>&1 || nginx >/dev/null 2>&1 || true
+    fi
+    return 0
+}
+
+nginx_http_probe() {
+    # 探活必须显式绕开系统代理：Linux 上常设了 http_proxy，
+    # 会把对 127.0.0.1 的请求送出去，得到假的失败。
+    local url="http://127.0.0.1:${NGINX_PORT}/"
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsS --noproxy '*' -o /dev/null "$url" 2>/dev/null
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q --no-proxy -O /dev/null "$url" 2>/dev/null
+    else
+        port_open "$NGINX_PORT"
+    fi
+}
+
+detect_lan_ip() {
+    # 给用户一个「照着敲就能打开」的地址。hostname -I 在多数发行版可用；
+    # 取第一个非回环地址，取不到就退 127.0.0.1（至少说明服务在本机是活的）。
+    local ips ip
+    ips="$(hostname -I 2>/dev/null || true)"
+    for ip in $ips; do
+        case "$ip" in
+            127.*|::1|fe80:*|"") continue ;;
+        esac
+        printf '%s' "$ip"
+        return 0
+    done
+    printf '127.0.0.1'
+}
+
+ensure_nginx() {
+    NGINX_READY="false"
+    NGINX_URL=""
+    [ "$NGINX_CONF_READY" = "true" ] || return 0
+
+    if [ "$NO_NGINX" = "true" ]; then
+        info "已跳过 Nginx 配置（--no-nginx）：站点配置在 $INSTALL_DIR/deploy/nginx-llmbridge.conf"
+        return 0
+    fi
+
+    # 1) 装
+    if ! command -v nginx >/dev/null 2>&1; then
+        if install_nginx_pkg && command -v nginx >/dev/null 2>&1; then
+            ok "Nginx 已安装：$(nginx -v 2>&1)"
+        else
+            warn "自动安装 Nginx 失败（包管理器不可用或软件源不可达）。"
+            warn "手工安装后重跑本脚本即可补齐：sudo dnf install -y nginx   # 或 apt-get install -y nginx"
+            return 0
+        fi
+    else
+        info "已检测到 Nginx：$(nginx -v 2>&1)"
+    fi
+
+    # 2) 写站点配置（先试 install -D，它自带 mkdir -p；失败退化为 mkdir + cp）
+    local conf_dir
+    conf_dir="$(pick_nginx_conf_dir)"
+    if ! install -D -m 644 "$INSTALL_DIR/deploy/nginx-llmbridge.conf" "$conf_dir/llmbridge.conf" 2>/dev/null; then
+        if mkdir -p "$conf_dir" && cp -f "$INSTALL_DIR/deploy/nginx-llmbridge.conf" "$conf_dir/llmbridge.conf"; then
+            :
+        else
+            warn "写入 $conf_dir/llmbridge.conf 失败，跳过 Nginx 配置。"
+            return 0
+        fi
+    fi
+    ok "站点配置已就位：$conf_dir/llmbridge.conf"
+
+    # 3) 让本站点拿到「默认 server」的位置
+    nginx_disable_default_sites
+
+    # 4) 语法门禁 —— 不通过就不 reload，避免把机器上其它站点一起搞挂
+    if ! nginx -t >/dev/null 2>&1; then
+        warn "nginx -t 未通过，站点配置未启用。报错如下："
+        nginx -t
+        warn "常见原因：端口 $NGINX_PORT 已被其它服务占用。可换端口重跑：bash $0 --nginx-port 8080"
+        return 0
+    fi
+    ok "Nginx 配置语法检查通过"
+
+    # 5) SELinux / 防火墙 / 启动
+    nginx_fix_selinux
+    nginx_open_firewall "$NGINX_PORT"
+    if ! nginx_start_or_reload; then
+        return 0
+    fi
+    ok "Nginx 已启动并加载站点配置"
+
+    # 6) 探活：通了才对外宣称「地址可用」
+    if nginx_http_probe; then
+        local psfx=""
+        [ "$NGINX_PORT" = "80" ] || psfx=":${NGINX_PORT}"
+        NGINX_READY="true"
+        NGINX_URL="http://$(detect_lan_ip)${psfx}/"
+    else
+        warn "Nginx 已启动，但探活 http://127.0.0.1:${NGINX_PORT}/ 未成功 —— 请确认后端服务在跑。"
+    fi
+}
+
+# =============================================================================
 #  引导（建表 / 管理员 / 厂商目录）
 # =============================================================================
 
@@ -613,9 +839,24 @@ print_summary() {
     local port_suffix=""
     [ "$NGINX_PORT" = "80" ] || port_suffix=":${NGINX_PORT}"
 
+    # 控制台地址放在最顶上：用户的诉求就是「装完直接给一个能打开的地址」。
+    # 只有探活成功（NGINX_READY）才写地址 —— 否则宁可明说「还没就绪」，
+    # 也不要甩一个打不开的 URL 让人反复试。
+    local console_line
+    if [ "$NGINX_READY" = "true" ] && [ "$FRONTEND_OK" = "true" ]; then
+        console_line="  ${C_GREEN}${C_BOLD}控制台地址  ${NGINX_URL}${C_OFF}   ← 浏览器打开即后台管理界面"
+    elif [ "$NGINX_READY" = "true" ]; then
+        console_line="  控制台地址  ${NGINX_URL}   （前端未构建，页面暂时空白，见下）"
+    else
+        console_line="  控制台地址  尚未就绪 —— 见下方「启用控制台」"
+    fi
+
     cat <<EOF
 
 ${C_GREEN}${C_BOLD}安装完成${C_OFF}
+
+${console_line}
+  默认账号    ${C_BOLD}admin / admin123${C_OFF}（首次登录后请立即修改密码）
 
   服务管理   systemctl {status|restart|stop} ${SERVICE_NAME}
   查看日志   journalctl -u ${SERVICE_NAME} -f
@@ -627,7 +868,18 @@ ${C_GREEN}${C_BOLD}安装完成${C_OFF}
 
 EOF
 
-    if [ "$FRONTEND_OK" = "true" ] && [ "$NGINX_CONF_READY" = "true" ]; then
+    if [ "$NGINX_READY" = "true" ]; then
+        # 已装好：不再让用户动手，只给「想改配置时怎么办」的可选信息。
+        cat <<EOF
+${C_BOLD}控制台已就绪${C_OFF}
+
+  浏览器打开 ${C_BOLD}${NGINX_URL}${C_OFF} 即进入后台管理界面（默认账号 admin / admin123）。
+  站点配置   $(pick_nginx_conf_dir)/llmbridge.conf
+  改完之后   sudo nginx -t && sudo systemctl reload nginx
+
+EOF
+    elif [ "$FRONTEND_OK" = "true" ] && [ "$NGINX_CONF_READY" = "true" ]; then
+        # 兜底：只有自动装 Nginx 没成功时才会走到这里。
         # 提示语必须按「本机有没有 nginx」分岔：
         # 没装时 /etc/nginx/conf.d 根本不存在，照抄 cp 会得到
         # 「cp: 无法创建普通文件 '/etc/nginx/conf.d/llmbridge.conf': 没有那个文件或目录」——
@@ -735,6 +987,10 @@ main() {
             die "未找到 $INSTALL_DIR/admin-web —— 请先完整安装一次，或用 --dir 指定正确的安装目录。"
         build_frontend
         write_nginx_conf
+        # 走这条路的用户多半就是上次卡在「前端没构建 / Nginx 没配好」的人 —— 顺手补齐，
+        # 并把控制台地址打出来，而不是静默退出让人以为没干活。
+        ensure_nginx
+        print_summary
         exit 0
     fi
 
@@ -777,6 +1033,11 @@ EOF
     step "注册并启动服务"
     install_service
     health_check || true
+
+    # 放在服务之后：Nginx 反代的目标必须已经起来，否则探活必然失败。
+    step "配置 Nginx（自动安装 + 站点配置 + 放行端口）"
+    ensure_nginx
+
     print_summary
 }
 

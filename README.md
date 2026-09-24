@@ -223,7 +223,7 @@ POST https://api.typesafe.ai/v1/systemone        // Authorization: Bearer $JEV_A
 | 前端 | Vue 3.4 + Vite 5 + TypeScript 5.4 + Element Plus 2.6 + Pinia 2.1 + Vue Router 4 |
 | 路由内核 | 自研三层判定（L1 规则 / L2 Jev 判定器 / L3 兜底），实现全局唯一一份 |
 | 加密 | AES-256-GCM（厂商密钥）+ JWT（控制台会话） |
-| Web 服务器 | Nginx（Docker Compose 形态内置；裸机形态由安装脚本生成站点配置） |
+| Web 服务器 | Nginx（Docker Compose 形态内置；裸机形态由安装脚本**自动安装并配置**） |
 | 部署 | systemd（脚本安装）· Docker Compose · Apple container（macOS）· 源码 |
 
 ---
@@ -264,15 +264,19 @@ POST https://api.typesafe.ai/v1/systemone        // Authorization: Bearer $JEV_A
 ### 方式一：脚本安装（推荐）
 
 面向 **Linux 裸机**（systemd）。脚本自动完成：拉取源码 → 建运行用户 → 建虚拟环境 →
-装依赖 → 生成 `.env`（随机密钥）→ 初始化数据 → 构建控制台前端 → 生成 Nginx 站点配置 →
-注册并启动 systemd 服务。
+装依赖 → 生成 `.env`（随机密钥）→ 初始化数据 → 构建控制台前端 → 注册并启动 systemd 服务 →
+**自动安装并配置 Nginx**（写站点配置、放行 SELinux 与防火墙）→ **打印控制台地址**。
+
+也就是说：**装完就能用，不需要你再手工敲任何命令** —— 结束时直接给出
+`控制台地址  http://<服务器IP>/`，浏览器打开即是后台管理界面。
 
 #### 前置条件
 
 - Linux（systemd 发行版；无 systemd 会提示改用 `--no-service`）
 - Python **3.11+**（脚本会检测；不满足时给出各发行版的安装命令）
 - **Node.js 20+**（用于构建控制台前端；缺失时脚本会明确告警并给出补装办法）
-- Nginx（启用控制台用；脚本会生成站点配置，安装命令也在结束提示里给出）
+- Nginx —— **无需预装**：脚本会用系统包管理器自动装好并配置
+  （`apt` / `dnf` / `yum` / `zypper` / `apk`）。若你想用自己的 web 服务器，加 `--no-nginx` 跳过
 
 #### 安装
 
@@ -292,7 +296,8 @@ sudo bash deploy/install.sh
 sudo bash deploy/install.sh --port 9000            # 后端改监听 9000
 sudo bash deploy/install.sh --dir /srv/llmbridge   # 换安装目录（默认 /opt/llmbridge）
 sudo bash deploy/install.sh --postgres "postgresql+psycopg://user:pass@127.0.0.1:5432/llmbridge"
-sudo bash deploy/install.sh --nginx-port 8080      # 生成 :8080 的站点配置（默认 80）
+sudo bash deploy/install.sh --nginx-port 8080      # 控制台对外端口（默认 80）
+sudo bash deploy/install.sh --no-nginx             # 不自动装/配 Nginx（改用你已有的 web 服务器）
 sudo bash deploy/install.sh --with-models          # 额外灌入目录里的参考模型与参考单价
 sudo bash deploy/install.sh --skip-frontend        # 不构建前端（自备 dist 时）
 sudo bash deploy/install.sh --frontend-only        # 只补构建前端，其它一律不碰
@@ -304,20 +309,32 @@ sudo bash deploy/install.sh --help
 > （`<安装目录>/llmbridge.db`），保证「装完就能打开界面」。
 > 生产建议显式用 `--postgres` 指定，或装好后改 `.env` 的 `DATABASE_URL` 再重启。
 
-#### 安装后：启用控制台
+#### 安装后：打开控制台
 
 后端只提供 `/v1` 与 `/admin` 两套**接口**，不托管前端静态文件；控制台是需要 web 服务器
-托管的独立 SPA。安装脚本已把站点配置生成好了（含 SSE 必要的 `proxy_buffering off`）：
+托管的独立 SPA。**这些步骤脚本已经替你做完**，结束时直接打印地址：
 
-```bash
-sudo cp /opt/llmbridge/deploy/nginx-llmbridge.conf /etc/nginx/conf.d/llmbridge.conf
-sudo nginx -t && sudo systemctl reload nginx
+```text
+安装完成
+
+  控制台地址  http://<服务器IP>/   ← 浏览器打开即后台管理界面
+  默认账号    admin / admin123（首次登录后请立即修改密码）
 ```
 
-然后浏览器打开 `http://<服务器IP>/`，默认账号 `admin / admin123`。
+配置 Nginx 时脚本顺带处理了三件最容易卡住的事，无需你手工做：
 
-> 用 Caddy 或其它 web 服务器也可以，只需满足两点：静态托管 `<安装目录>/admin-web/dist`
-> 并对未命中路径回落 `index.html`；把 `/v1/`、`/admin/`、`/health` 反代到 `127.0.0.1:<port>`。
+- **没装 Nginx** → 自动用系统包管理器安装；
+- **发行版自带默认站点占着 80 的 `default_server`** → 自动移走让位，
+  否则访问到的是 Nginx 欢迎页、反代完全没走；
+- **SELinux / 防火墙拦截** → 自动 `setsebool -P httpd_can_network_connect 1` 并放行端口
+  （RHEL / CentOS 上不做这一步就是一律 502）。
+
+> 若服务器在**云厂商安全组**后面，仍需在云控制台放行该端口 —— 这一步在机器内做不到。
+>
+> 用 Caddy 等其它 web 服务器（或加 `--no-nginx` 跳过自动配置）时，只需满足两点：
+> 静态托管 `<安装目录>/admin-web/dist` 并对未命中路径回落 `index.html`；
+> 把 `/v1/`、`/admin/`、`/health` 反代到 `127.0.0.1:<port>`。
+> 站点配置模板见 `deploy/nginx-standalone.conf`（`__API_PORT__` / `__LISTEN_PORT__` / `__DIST_DIR__`）。
 
 #### 升级
 

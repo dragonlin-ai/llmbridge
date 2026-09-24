@@ -1,7 +1,7 @@
 # LLM 路由中转系统 · 项目文档中心
 
 > 工程方法论：**OPD（One-Person Development，一人AI开发·四维数字员工开发工程）**
-> 文档版本：V1.6.4 ｜ 建立日期：2026-09-21 ｜ 责任方：HD（齐活林，交付总监）
+> 文档版本：V1.6.5 ｜ 建立日期：2026-09-21 ｜ 责任方：HD（齐活林，交付总监）
 
 ---
 
@@ -455,6 +455,7 @@ llmbridge/
 | 2026-09-24 | **V1.6.2** | ① **文档层变更（不改接口 / 表结构 / 判定口径）**：中英双语 README 新增专章 **「决策内核：Jev」**，把判定模型从「一张表里的一行」提升为可对外宣讲的能力说明 —— 含 Jev 与「拿大模型当裁判」的逐项对照、Choice / Score / Noul 三原语、本项目真实请求体（一次调用并行 4 问）、「为什么不直接让 Jev 选 `model_id`」、接入现状与两条知情项<br>② **两条风险写进对外文档**：Jev 官方 API 未对中国大陆开放（境内直连 = 用户输入出境，默认 `JUDGE_PROVIDER=mock`）、厂商自报准确率约 68% 低于 85% 验收线（须自测），同条并入「已知限制」<br>③ 配置表补齐 3 个漏列的判定器变量：`JEV_API_KEY` / `JEV_BASE_URL` / `DECIDER_TIMEOUT_MS`<br>④ 版式：顶部加 `decider` 徽章 + 折叠目录（中英各 15 个锚点，已逐一核验）；标题 / 简介 / 徽章 / 语言切换四块居中（`<div align="center">` + 空行保 Markdown 解析，已用 GitHub 官方 GFM 渲染接口核对真实输出） | HD |
 | 2026-09-24 | **V1.6.3** | ① **文档层变更（不改接口 / 表结构 / 判定口径）**：中英双语 README 顶部新增**自绘矢量图标** `.github/images/llmbridge-logo.svg`（几何图标：请求入站 → 判定菱形 → 三个落点，落点色沿用界面既定语义 **L1 绿 / L2 紫 / L3 红**；自带渐变圆角底，故 GitHub 亮色与暗色主题下均可见；纯路径绘制、不依赖字体，任意尺寸清晰）<br>② 新增 **「交流与社区」章节**（中英各一份，位于「已知限制」之后、「许可证」之前）：微信交流二维码 `.github/images/微信交流.jpg`、Issues / Discussions 入口、商务联系邮箱，并同步折叠目录（各 16 个锚点）<br>③ `scripts/build_release.py` 的 `INCLUDE_DIRS` 增加 `.github/images` —— 否则发布包内的 README 图片全部断链<br>④ **修掉一条线上一直失效的目录锚点**：`## ⚠️ 部署前必读` 的真实锚点含**不可见的 U+FE0F**（github-slugger 不删变体选择符），常规写法永远对不上；两级标题的 `⚠️` 改用不带 U+FE0F 的 `🚨`，锚点恢复为可预期的 `#-部署前必读`；本地 slug 复算同步改为按 Unicode 大类筛字符（保留 L/N/M，删 P/S/C），并以线上真实锚点回归 12/12 | HD |
 | 2026-09-24 | **V1.6.4** | ① **安装脚本提示层变更（不改接口 / 表结构 / 判定口径）**：`deploy/install.sh` 结束摘要改为**按「本机有没有 Nginx」分岔**输出 —— 未装时先给安装命令（`dnf` / `apt-get`）与 RHEL/CentOS 的 SELinux（`setsebool -P httpd_can_network_connect 1`）、防火墙放行，再给站点配置两步<br>② 站点配置落盘命令由 `cp` 改为 `install -D -m 644`（自带 `mkdir -p`），消除「`/etc/nginx/conf.d` 不存在 → `无法创建普通文件 … 没有那个文件或目录`」这一误导性失败（**该报错指目标目录缺失**，源文件缺失时报的是「无法获取 … 的状态」）<br>③ 提示与文档补第二个高发坑：`nginx -t` 与 `reload` 都成功、访问 IP 却仍是**发行版默认欢迎页** —— 系统默认站点占着 80 的 `default_server`，本站点 `server_name _` 抢不到默认位（Debian/Ubuntu 删 `sites-enabled/default`；RHEL 系注释 `nginx.conf` 的 `default_server` 块）<br>④ `05-安装打包说明.md`：手工装配段补「前提是本机已装 Nginx」，常见问题表新增 3 行（`conf.d` 缺失报错 / 欢迎页抢 80 / SELinux 502） | HD |
+| 2026-09-24 | **V1.6.5** | ① **安装脚本行为变更（不改接口 / 表结构 / 判定口径）**：`deploy/install.sh` 新增 `ensure_nginx` —— 未装 Nginx 时按 `apt`/`dnf`/`yum`/`zypper`/`apk` 自动安装；随后渲染并写入站点配置、**移走发行版自带默认站点**（否则其 80 的 `default_server` 会把请求接走 → 访问到的是欢迎页、反代完全没走）、按需 `setsebool -P httpd_can_network_connect 1` 与放行防火墙端口、`nginx -t` 门禁 + reload，**探活成功才置位「可用」**<br>② **安装结束摘要顶部直接给出控制台地址**（`控制台地址 http://<服务器IP>/`，IP 取 `hostname -I` 首个非回环地址），紧跟默认账号；只有探活通过才写地址，否则明说「尚未就绪」，不给打不开的 URL<br>③ 新增 **`--no-nginx`**（改用自备 web 服务器）；`--frontend-only` 也顺带补齐 Nginx 并打印地址<br>④ **失败不阻断**：装不上 Nginx、`nginx -t` 不通过、启动失败均只告警并返回 0，兜底提示保留手工步骤与 `--nginx-port` 换端口<br>⑤ 文档同步：README（中英）的「前置条件 / 常用选项 / 安装后打开控制台」段重写，`05-安装打包说明.md` 补「Nginx 不漏」约束、手工段标注「方式一可跳过」、常见问题表分组，验证边界写入本轮新增的**函数级自测**范围（`ensure_nginx` 四分支 + `print_summary` 三态 + 四个系统函数在目标缺失时零副作用） | HD |
 
 > 变更依据见 `阶段一-需求与规划/06-需求澄清记录.md`。
 

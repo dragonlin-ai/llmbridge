@@ -242,7 +242,7 @@ Client ────────────▶│  auth → rate limit → routi
 | Frontend | Vue 3.4 + Vite 5 + TypeScript 5.4 + Element Plus 2.6 + Pinia 2.1 + Vue Router 4 |
 | Routing core | In-house three-layer decision (L1 rules / L2 Jev / L3 fallback), single implementation |
 | Cryptography | AES-256-GCM (vendor keys) + JWT (console sessions) |
-| Web server | Nginx (bundled in the Docker Compose form; generated as a site config for bare-metal) |
+| Web server | Nginx (bundled in the Docker Compose form; **installed and configured automatically** for bare-metal) |
 | Deployment | systemd (script install) · Docker Compose · Apple container (macOS) · from source |
 
 ---
@@ -290,8 +290,12 @@ Four options — pick the one that matches your environment:
 
 Targets **bare-metal Linux** with systemd. The script pulls the source, creates the service
 user, builds the virtualenv, installs dependencies, generates `.env` with random secrets,
-initializes the database, builds the console frontend, generates an Nginx site config, and
-registers + starts the systemd service.
+initializes the database, builds the console frontend, registers + starts the systemd service,
+**installs and configures Nginx automatically** (writes the site config, opens SELinux and the
+firewall), and finally **prints the console URL**.
+
+In other words: **you install it and it just works — no follow-up commands.** The run ends with
+`Console URL  http://<server-ip>/`, which opens straight into the admin UI.
 
 #### Prerequisites
 
@@ -299,7 +303,9 @@ registers + starts the systemd service.
 - Python **3.11+** (detected; the script prints install commands per distro if missing)
 - **Node.js 20+** to build the console frontend (if missing the script warns loudly and
   tells you how to finish that step later)
-- Nginx to serve the console (the script generates the site config and prints the install command)
+- Nginx — **no need to preinstall it**: the script installs and configures it via the system
+  package manager (`apt` / `dnf` / `yum` / `zypper` / `apk`). If you'd rather use your own web
+  server, pass `--no-nginx` to skip this step
 
 #### Install
 
@@ -319,7 +325,8 @@ Common options:
 sudo bash deploy/install.sh --port 9000            # backend listens on 9000
 sudo bash deploy/install.sh --dir /srv/llmbridge   # install dir (default /opt/llmbridge)
 sudo bash deploy/install.sh --postgres "postgresql+psycopg://user:pass@127.0.0.1:5432/llmbridge"
-sudo bash deploy/install.sh --nginx-port 8080      # generate a :8080 site config (default 80)
+sudo bash deploy/install.sh --nginx-port 8080      # console port (default 80)
+sudo bash deploy/install.sh --no-nginx             # do not install/configure Nginx; use your own
 sudo bash deploy/install.sh --with-models          # also seed the catalog's reference models/prices
 sudo bash deploy/install.sh --skip-frontend        # skip the frontend build
 sudo bash deploy/install.sh --frontend-only        # build the frontend only, touch nothing else
@@ -332,22 +339,35 @@ sudo bash deploy/install.sh --help
 > "install and open the console" actually works. For production, pass `--postgres` explicitly
 > or edit `DATABASE_URL` in `.env` and restart.
 
-#### After installing: enable the console
+#### After installing: open the console
 
 The backend only exposes the `/v1` and `/admin` **APIs** — it does not serve static files.
-The console is a separate SPA that needs a web server. The installer has already generated
-the site config (including the SSE-critical `proxy_buffering off`):
+The console is a separate SPA that needs a web server. **The script has already done all of
+that**, and it prints the address when it finishes:
 
-```bash
-sudo cp /opt/llmbridge/deploy/nginx-llmbridge.conf /etc/nginx/conf.d/llmbridge.conf
-sudo nginx -t && sudo systemctl reload nginx
+```text
+Installation complete
+
+  Console URL  http://<server-ip>/   <- opens straight into the admin UI
+  Credentials  admin / admin123 (change the password right after the first login)
 ```
 
-Then open `http://<server-ip>/` and log in with `admin / admin123`.
+Configuring Nginx, the script also handles the three things that most often block people:
 
-> Caddy or any other web server works too. Two requirements: serve
-> `<install dir>/admin-web/dist` statically with an `index.html` fallback for unmatched paths,
-> and reverse-proxy `/v1/`, `/admin/`, and `/health` to `127.0.0.1:<port>`.
+- **Nginx not installed** — installed automatically via the system package manager;
+- **The distro's default site owns `default_server` on port 80** — moved aside, otherwise you
+  land on the Nginx welcome page and the reverse proxy is never used;
+- **SELinux / firewall blocking** — it runs `setsebool -P httpd_can_network_connect 1` and
+  opens the port (on RHEL / CentOS, skipping this means every request returns 502).
+
+> If the server sits behind a **cloud security group**, you still have to open the port in the
+> cloud console — that cannot be done from inside the machine.
+>
+> With Caddy or any other web server (or when passing `--no-nginx`), two requirements apply:
+> serve `<install dir>/admin-web/dist` statically with an `index.html` fallback for unmatched
+> paths, and reverse-proxy `/v1/`, `/admin/`, and `/health` to `127.0.0.1:<port>`.
+> The template lives at `deploy/nginx-standalone.conf`
+> (`__API_PORT__` / `__LISTEN_PORT__` / `__DIST_DIR__`).
 
 #### Upgrade
 
