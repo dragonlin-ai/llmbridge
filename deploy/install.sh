@@ -628,22 +628,58 @@ ${C_GREEN}${C_BOLD}安装完成${C_OFF}
 EOF
 
     if [ "$FRONTEND_OK" = "true" ] && [ "$NGINX_CONF_READY" = "true" ]; then
-        cat <<EOF
+        # 提示语必须按「本机有没有 nginx」分岔：
+        # 没装时 /etc/nginx/conf.d 根本不存在，照抄 cp 会得到
+        # 「cp: 无法创建普通文件 '/etc/nginx/conf.d/llmbridge.conf': 没有那个文件或目录」——
+        # 这句报错说的是目标目录缺失（源缺失时报的是「无法获取 … 的状态」），
+        # 但字面上像是在怪站点配置，用户极易误判成配置文件有问题。
+        # `install -D` 会自带 mkdir -p，把这个失败模式直接消掉。
+        if command -v nginx >/dev/null 2>&1; then
+            cat <<EOF
 ${C_BOLD}启用控制台（还差两步）${C_OFF}
 
-  后端在 127.0.0.1:${SVC_PORT} 监听、前端产物也已就绪，但还需要一个 web 服务器
-  把两者串起来。站点配置已替你生成（含 SSE 相关配置，不必手写）：
+  后端在 127.0.0.1:${SVC_PORT} 监听、前端产物也已就绪，只差把站点配置挂进 Nginx。
+  站点配置已替你生成（含 SSE 四件套，不必手写）：
 
-    sudo cp ${INSTALL_DIR}/deploy/nginx-llmbridge.conf /etc/nginx/conf.d/llmbridge.conf
+    sudo install -D -m 644 ${INSTALL_DIR}/deploy/nginx-llmbridge.conf /etc/nginx/conf.d/llmbridge.conf
     sudo nginx -t && sudo systemctl reload nginx
 
-  若尚未安装 Nginx：
-    sudo apt-get install -y nginx     # Debian / Ubuntu
-    sudo dnf install -y nginx         # RHEL / Fedora
+  提示：reload 成功但访问 IP 仍是 Nginx 欢迎页，是系统自带的默认站点占着 80 的
+  default_server（Debian/Ubuntu 在 /etc/nginx/sites-enabled/default；RHEL 系在
+  nginx.conf 里的 default_server 块）—— 本站点的 server_name 是 `_`，抢不到默认位。
+  移走那份默认站点再 reload 即可，与本项目 /v1 的配置无关。
 
   之后打开控制台：${C_BOLD}http://<服务器IP>${port_suffix}/${C_OFF}
 
 EOF
+        else
+            cat <<EOF
+${C_BOLD}启用控制台（还差三步 —— 本机还没有 Nginx）${C_OFF}
+
+  后端在 127.0.0.1:${SVC_PORT} 监听、前端产物也已就绪，但控制台是独立的 Vue SPA，
+  需要一个 web 服务器托管它的构建产物、并把 /v1/ 与 /admin/ 反代过去。先装 Nginx：
+
+    sudo dnf install -y nginx       # RHEL / CentOS / Fedora
+    sudo apt-get install -y nginx   # Debian / Ubuntu
+    sudo systemctl enable --now nginx
+
+  站点配置已替你生成（含 SSE 四件套，不必手写）。装完 Nginx 再执行：
+
+    sudo install -D -m 644 ${INSTALL_DIR}/deploy/nginx-llmbridge.conf /etc/nginx/conf.d/llmbridge.conf
+    sudo nginx -t && sudo systemctl reload nginx
+
+  RHEL / CentOS 上装完仍打不开，通常是这两处没放行（与配置无关）：
+    sudo setsebool -P httpd_can_network_connect 1      # SELinux：不放行则反代一律 502
+    sudo firewall-cmd --permanent --add-service=http && sudo firewall-cmd --reload
+
+  提示：reload 成功但访问 IP 仍是 Nginx 欢迎页，是系统自带的默认站点占着 80 的
+  default_server（Debian/Ubuntu 在 /etc/nginx/sites-enabled/default；RHEL 系在
+  nginx.conf 里的 default_server 块）—— 移走那份默认站点再 reload 即可。
+
+  之后打开控制台：${C_BOLD}http://<服务器IP>${port_suffix}/${C_OFF}
+
+EOF
+        fi
     elif [ "$FRONTEND_OK" = "true" ]; then
         cat <<EOF
 ${C_BOLD}控制台前端已就绪${C_OFF}

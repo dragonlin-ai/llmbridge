@@ -1,7 +1,7 @@
 # LLM 路由中转系统 · 项目文档中心
 
 > 工程方法论：**OPD（One-Person Development，一人AI开发·四维数字员工开发工程）**
-> 文档版本：V1.6.3 ｜ 建立日期：2026-09-21 ｜ 责任方：HD（齐活林，交付总监）
+> 文档版本：V1.6.4 ｜ 建立日期：2026-09-21 ｜ 责任方：HD（齐活林，交付总监）
 
 ---
 
@@ -454,6 +454,7 @@ llmbridge/
 | 2026-09-23 | **V1.6.1** | ① 内置目录新增**小米 MiMo**（`vendor=xiaomi-mimo`）：**按量 API**（`https://api.xiaomimimo.com/v1`，`sk-` Key）与 **Token Plan 订阅**（`https://token-plan-cn.xiaomimimo.com/v1`，个人版 `tp-` / 团队版 `ttp-` Key）两条**密钥互不通用**的通道；旗舰 `mimo-v2.6-pro`（3 / 6 元，命中缓存 0.025 元）与 `mimo-v2.6-flash`（1 / 2 元）在两条通道各收录一次，共 4 个模型，均标称 100 万上下文<br>② Token Plan 通道带**官方条款警示原文**（仅限编程工具交互式使用、禁止作为应用后端、额度耗尽即停且不转按量、不支持退款）<br>③ 鉴权头据官方文档核实：`Authorization: Bearer`（SDK 用法）与 `api-key`（curl 示例）**两种均被接受**，本网关适配器发前者可直接用<br>④ 小米「批量推理」另有**专属端点**（`https://batch-api-cn.xiaomimimo.com/v1`，约实时价 5 折），按 V1.5「`batch` 不单列通道」的约定仍**不建独立行**，端点与折扣写进 `api` 通道 `note` 备查，并提示批量接口可能为异步语义、启用前需确认<br>⑤ 预置数量扩为 **13 家厂商 / 24 条接入通道 / 55 个模型**（订阅类 11 条：5 `coding_plan` + 6 `token_plan`，合计 25 个模型；4 条暂无模型）<br>⑥ 单价口径留痕：`mimo-v2.5-pro` / `mimo-v2.5` 官方公告 2026-10-21 下线故未收录；UltraSpeed 未查到公开单价故未收录 —— 均只写进 `note`，不编造数字 | HD |
 | 2026-09-24 | **V1.6.2** | ① **文档层变更（不改接口 / 表结构 / 判定口径）**：中英双语 README 新增专章 **「决策内核：Jev」**，把判定模型从「一张表里的一行」提升为可对外宣讲的能力说明 —— 含 Jev 与「拿大模型当裁判」的逐项对照、Choice / Score / Noul 三原语、本项目真实请求体（一次调用并行 4 问）、「为什么不直接让 Jev 选 `model_id`」、接入现状与两条知情项<br>② **两条风险写进对外文档**：Jev 官方 API 未对中国大陆开放（境内直连 = 用户输入出境，默认 `JUDGE_PROVIDER=mock`）、厂商自报准确率约 68% 低于 85% 验收线（须自测），同条并入「已知限制」<br>③ 配置表补齐 3 个漏列的判定器变量：`JEV_API_KEY` / `JEV_BASE_URL` / `DECIDER_TIMEOUT_MS`<br>④ 版式：顶部加 `decider` 徽章 + 折叠目录（中英各 15 个锚点，已逐一核验）；标题 / 简介 / 徽章 / 语言切换四块居中（`<div align="center">` + 空行保 Markdown 解析，已用 GitHub 官方 GFM 渲染接口核对真实输出） | HD |
 | 2026-09-24 | **V1.6.3** | ① **文档层变更（不改接口 / 表结构 / 判定口径）**：中英双语 README 顶部新增**自绘矢量图标** `.github/images/llmbridge-logo.svg`（几何图标：请求入站 → 判定菱形 → 三个落点，落点色沿用界面既定语义 **L1 绿 / L2 紫 / L3 红**；自带渐变圆角底，故 GitHub 亮色与暗色主题下均可见；纯路径绘制、不依赖字体，任意尺寸清晰）<br>② 新增 **「交流与社区」章节**（中英各一份，位于「已知限制」之后、「许可证」之前）：微信交流二维码 `.github/images/微信交流.jpg`、Issues / Discussions 入口、商务联系邮箱，并同步折叠目录（各 16 个锚点）<br>③ `scripts/build_release.py` 的 `INCLUDE_DIRS` 增加 `.github/images` —— 否则发布包内的 README 图片全部断链<br>④ **修掉一条线上一直失效的目录锚点**：`## ⚠️ 部署前必读` 的真实锚点含**不可见的 U+FE0F**（github-slugger 不删变体选择符），常规写法永远对不上；两级标题的 `⚠️` 改用不带 U+FE0F 的 `🚨`，锚点恢复为可预期的 `#-部署前必读`；本地 slug 复算同步改为按 Unicode 大类筛字符（保留 L/N/M，删 P/S/C），并以线上真实锚点回归 12/12 | HD |
+| 2026-09-24 | **V1.6.4** | ① **安装脚本提示层变更（不改接口 / 表结构 / 判定口径）**：`deploy/install.sh` 结束摘要改为**按「本机有没有 Nginx」分岔**输出 —— 未装时先给安装命令（`dnf` / `apt-get`）与 RHEL/CentOS 的 SELinux（`setsebool -P httpd_can_network_connect 1`）、防火墙放行，再给站点配置两步<br>② 站点配置落盘命令由 `cp` 改为 `install -D -m 644`（自带 `mkdir -p`），消除「`/etc/nginx/conf.d` 不存在 → `无法创建普通文件 … 没有那个文件或目录`」这一误导性失败（**该报错指目标目录缺失**，源文件缺失时报的是「无法获取 … 的状态」）<br>③ 提示与文档补第二个高发坑：`nginx -t` 与 `reload` 都成功、访问 IP 却仍是**发行版默认欢迎页** —— 系统默认站点占着 80 的 `default_server`，本站点 `server_name _` 抢不到默认位（Debian/Ubuntu 删 `sites-enabled/default`；RHEL 系注释 `nginx.conf` 的 `default_server` 块）<br>④ `05-安装打包说明.md`：手工装配段补「前提是本机已装 Nginx」，常见问题表新增 3 行（`conf.d` 缺失报错 / 欢迎页抢 80 / SELinux 502） | HD |
 
 > 变更依据见 `阶段一-需求与规划/06-需求澄清记录.md`。
 

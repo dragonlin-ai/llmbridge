@@ -4,6 +4,26 @@
 
 ## [未发布]
 
+### 修掉裸机部署里两个「照抄命令必然失败」的坑
+
+- **`install.sh` 结束提示改为按「本机有没有 Nginx」分岔**：原先无条件打印
+  `sudo cp <安装目录>/deploy/nginx-llmbridge.conf /etc/nginx/conf.d/llmbridge.conf`，
+  而在**没装 Nginx** 的机器上 `/etc/nginx/conf.d` 根本不存在，照抄会得到
+  `cp: 无法创建普通文件 '/etc/nginx/conf.d/llmbridge.conf': 没有那个文件或目录` ——
+  这句报错说的是**目标目录缺失**（源文件缺失时报的是「无法获取 … 的状态」），
+  字面上却像是在怪站点配置，极易误判成「配置文件坏了」。现在：已装 → 直接给两步；
+  未装 → 先给装 Nginx 的命令，再给站点配置两步，并附 RHEL / CentOS 的 SELinux 与防火墙放行。
+- **落盘命令本身也换了**：`cp` → `install -D -m 644`（`install -D` 自带 `mkdir -p`），
+  把「目标目录不存在」这个失败模式从根上消掉。
+- **补上第二个高发坑**：站点配好、`nginx -t` 与 `systemctl reload nginx` 都成功，
+  访问 IP 却是 **Nginx 欢迎页** —— 系统自带的默认站点占着 80 端口的 `default_server`，
+  而本站点 `server_name` 是 `_`（不匹配任何真实 Host），抢不到「默认」位，请求被默认站点接走。
+  提示里给出 Debian / Ubuntu（删 `/etc/nginx/sites-enabled/default`）与
+  RHEL 系（注释 `nginx.conf` 里的 `default_server` 块）两种处理。**与 `/v1` 的 SSE 配置无关**。
+- **文档同步**：`docs/阶段五-部署与交付/05-安装打包说明.md` 的手工装配段补「前提是本机已装 Nginx」
+  的说明，常见问题表新增 3 行（`conf.d` 目录缺失报错 / 欢迎页抢 80 / SELinux 502）。
+- **口径说明**：**安装脚本提示层 + 文档层变更**，未动任何接口、表结构或判定口径。
+
 ### README 顶部加自绘图标，新增「交流与社区」
 
 - **新增矢量图标** `.github/images/llmbridge-logo.svg`（中英 README 顶部各引用一次，`width="120"`）：
