@@ -4,6 +4,18 @@
 
 ## [未发布]
 
+### 修掉「一键安装」收尾没做完 Nginx：反引号误执行 + 探活误判 + RHEL SELinux 兜底
+
+- **根因一（确定性 bug）**：`print_summary` 的「启用控制台」提示里，在**未加引号**的 heredoc 中用反引号包着 `` `_` ``（指 nginx 的占位 server_name），bash 把它当成**命令替换**去执行 `_` 命令，安装末尾必报 `main: 行 N: _: 未找到命令`，并让那句话里的 server_name 丢失。
+- **根因二（探活误判）**：`nginx_http_probe` 原先用 `curl -fsS`（带 `-f`），nginx 哪怕只是返回 403（SELinux 上下文偶发）/ 502（后端刚起还没热）就被判失败，导致 `NGINX_READY` 始终为 `false`、控制台永远显示「尚未就绪」，与「一键装完就能打开」相悖；且只在 nginx 监听的瞬间探测一次，nginx 刚 reload 完端口尚未 bind 也白判。
+- **根因三（RHEL 最小化安装）**：`nginx_fix_selinux` 在 SELinux Enforcing 下要把非标准端口（8081）登记进 `http_port_t`，但最小化安装常缺 `semanage`（来自 `policycoreutils-python-utils`），缺了就只告警、nginx 在 8081 上绑不上、起不来，却无人兜底。
+- **修法**：
+  ① 把提示里的 `` `_` `` 换成中文引号「_」，消除命令替换（其余反引号都在 `#` 注释里，无害）；
+  ② 重写 `nginx_http_probe`：去掉 `-f`，改为「HTTP 任意应答即算生效」+ 最多 12 次（约 12s）重试 + 退化到纯 TCP 连通性（`port_open`，不依赖 curl/wget，也不受 HTTP 状态码影响）；只要 nginx 在 `NGINX_PORT` 上真正监听就视为站点已生效；
+  ③ 新增 `NGINX_FAIL_REASON`：每次 `ensure_nginx` 提前返回都把卡住的**具体那一步**（缺 nginx/写配置失败/`nginx -t` 未过/启动失败/探活失败）记下来，并打印进摘要的「启用控制台」小节，用户只贴尾部也能看到原因；
+  ④ `nginx_fix_selinux` 在 Enforcing 且 `semanage` 缺失时，自动 `dnf/yum/apt-get` 补装 `policycoreutils-python-utils`（Debian 系为 `policycoreutils`）后再登记端口。
+- **范围**：纯部署脚本层，**未动任何接口、表结构或判定口径**。
+
 ### 控制台对外默认端口 80 → 8081
 
 - **变更**：后台管理端（控制台）的对外入口端口默认值由 `80` 改为 `8081`。

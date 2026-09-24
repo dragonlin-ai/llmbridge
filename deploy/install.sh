@@ -101,6 +101,7 @@ NPM_REGISTRY=""              # --npm-registry：非空则固定用这个源
 FRONTEND_OK="false"          # 由 build_frontend 置位，供结束摘要判断怎么提示
 NGINX_CONF_READY="false"     # 由 write_nginx_conf 置位
 NGINX_READY="false"          # 由 ensure_nginx 置位：站点真的对外可用了
+NGINX_FAIL_REASON=""         # ensure_nginx 没就绪时，记录最后一步卡在哪（打印进摘要）
 NGINX_URL=""                 # 控制台访问地址（只有装成功才有值）
 NODE_VER=""                  # detect_node 命中后填
 NODE_HOME=""                 # 自动安装的 Node.js 根目录（仅自动装时有值）
@@ -838,6 +839,18 @@ nginx_fix_selinux() {
     case "$NGINX_PORT" in
         80|443|8080) ;;
         *)
+            if ! command -v semanage >/dev/null 2>&1; then
+                # 最小化安装常缺 semanage（policycoreutils-python-utils），
+                # 没有它就无法把 8081 登记进 http_port_t，nginx 在 Enforcing 下绑不了该端口。
+                # 一键安装顺手补上，避免「配置写好了、nginx 却起不来」这种难归因的失败。
+                if command -v dnf >/dev/null 2>&1; then
+                    dnf install -y policycoreutils-python-utils >/dev/null 2>&1 || true
+                elif command -v yum >/dev/null 2>&1; then
+                    yum install -y policycoreutils-python-utils >/dev/null 2>&1 || true
+                elif command -v apt-get >/dev/null 2>&1; then
+                    DEBIAN_FRONTEND=noninteractive apt-get install -y policycoreutils >/dev/null 2>&1 || true
+                fi
+            fi
             if command -v semanage >/dev/null 2>&1; then
                 semanage port -a -t http_port_t -p tcp "$NGINX_PORT" 2>/dev/null || \
                     semanage port -m -t http_port_t -p tcp "$NGINX_PORT" 2>/dev/null || true
@@ -889,16 +902,30 @@ nginx_start_or_reload() {
 }
 
 nginx_http_probe() {
-    # 探活必须显式绕开系统代理：Linux 上常设了 http_proxy，
-    # 会把对 127.0.0.1 的请求送出去，得到假的失败。
-    local url="http://127.0.0.1:${NGINX_PORT}/"
-    if command -v curl >/dev/null 2>&1; then
-        curl -fsS --noproxy '*' -o /dev/null "$url" 2>/dev/null
-    elif command -v wget >/dev/null 2>&1; then
-        wget -q --no-proxy -O /dev/null "$url" 2>/dev/null
-    else
-        port_open "$NGINX_PORT"
-    fi
+    # 探活目标：确认 Nginx 真的在本机 NGINX_PORT 上监听并加载了站点配置。
+    # 判定标准 = 「该端口上有服务在应答」即可，不苛求返回 200：
+    #   · 返回 200（SPA 首页）→ 正常；
+    #   · 返回 403（SELinux 上下文偶发未生效）/ 502（后端还没完全起来）→ 站点配置已生效，
+    #     属「页面层」问题，已由 chcon / 后端探活各自覆盖，不应让安装脚本误判「未就绪」；
+    #   · 端口压根连不上 → 才是真正的「没配好」。
+    # 必须显式绕开系统代理（Linux 常设 http_proxy，会把 127.0.0.1 请求送出去得假失败），
+    # 并带几次重试，吃掉 nginx 刚 reload 完、端口尚未 bind 的那几百毫秒。
+    local url="http://127.0.0.1:${NGINX_PORT}/" i=0
+    while [ "$i" -lt 12 ]; do
+        if command -v curl >/dev/null 2>&1; then
+            # 去掉 -f：4xx/5xx 也说明 nginx 在应答，算站点已生效。
+            curl -sS --noproxy '*' -o /dev/null "$url" 2>/dev/null && return 0
+        elif command -v wget >/dev/null 2>&1; then
+            wget -q --no-proxy -O /dev/null "$url" 2>/dev/null && return 0
+        fi
+        # 退化到纯 TCP 连通性（不依赖 curl/wget，也不受 HTTP 状态码影响）。
+        if port_open "$NGINX_PORT"; then
+            return 0
+        fi
+        sleep 1
+        i=$((i + 1))
+    done
+    return 1
 }
 
 detect_lan_ip() {
@@ -919,6 +946,7 @@ detect_lan_ip() {
 ensure_nginx() {
     NGINX_READY="false"
     NGINX_URL=""
+    NGINX_FAIL_REASON=""
     [ "$NGINX_CONF_READY" = "true" ] || return 0
 
     if [ "$NO_NGINX" = "true" ]; then
@@ -933,6 +961,7 @@ ensure_nginx() {
         else
             warn "自动安装 Nginx 失败（包管理器不可用或软件源不可达）。"
             warn "手工安装后重跑本脚本即可补齐：sudo dnf install -y nginx   # 或 apt-get install -y nginx"
+            NGINX_FAIL_REASON="本机没有 Nginx 且自动安装失败（包管理器不可用或软件源不可达）。"
             return 0
         fi
     else
@@ -947,6 +976,7 @@ ensure_nginx() {
             :
         else
             warn "写入 $conf_dir/llmbridge.conf 失败，跳过 Nginx 配置。"
+            NGINX_FAIL_REASON="写入 $conf_dir/llmbridge.conf 失败（权限不足或磁盘满）。"
             return 0
         fi
     fi
@@ -960,6 +990,7 @@ ensure_nginx() {
         warn "nginx -t 未通过，站点配置未启用。报错如下："
         nginx -t
         warn "常见原因：端口 $NGINX_PORT 已被其它服务占用。可换端口重跑：$(self_cmd) --nginx-port 8080"
+        NGINX_FAIL_REASON="nginx -t 语法检查未通过（端口 $NGINX_PORT 被占用或配置冲突，详见上方报错）。"
         return 0
     fi
     ok "Nginx 配置语法检查通过"
@@ -968,6 +999,7 @@ ensure_nginx() {
     nginx_fix_selinux
     nginx_open_firewall "$NGINX_PORT"
     if ! nginx_start_or_reload; then
+        NGINX_FAIL_REASON="Nginx 启动/reload 失败（见上方 journalctl -u nginx 排查提示）。"
         return 0
     fi
     ok "Nginx 已启动并加载站点配置"
@@ -980,6 +1012,7 @@ ensure_nginx() {
         NGINX_URL="http://$(detect_lan_ip)${psfx}/"
     else
         warn "Nginx 已启动，但探活 http://127.0.0.1:${NGINX_PORT}/ 未成功 —— 请确认后端服务在跑。"
+        NGINX_FAIL_REASON="Nginx 在 ${NGINX_PORT} 上未监听到应答（确认后端在跑、端口未被防火墙/SELinux 拦）。"
     fi
 }
 
@@ -1162,9 +1195,11 @@ ${C_BOLD}启用控制台（还差两步）${C_OFF}
     sudo install -D -m 644 ${INSTALL_DIR}/deploy/nginx-llmbridge.conf /etc/nginx/conf.d/llmbridge.conf
     sudo nginx -t && sudo systemctl reload nginx
 
+${NGINX_FAIL_REASON:+  本次自动配置未完全生效的原因：${NGINX_FAIL_REASON}}
+
   提示：reload 成功但访问 IP 仍是 Nginx 欢迎页，是系统自带的默认站点占着 80 的
   default_server（Debian/Ubuntu 在 /etc/nginx/sites-enabled/default；RHEL 系在
-  nginx.conf 里的 default_server 块）—— 本站点的 server_name 是 `_`，抢不到默认位。
+  nginx.conf 里的 default_server 块）—— 本站点的 server_name 是「_」，抢不到默认位。
   移走那份默认站点再 reload 即可，与本项目 /v1 的配置无关。
 
   之后打开控制台：${C_BOLD}http://<服务器IP>${port_suffix}/${C_OFF}
@@ -1185,6 +1220,8 @@ ${C_BOLD}启用控制台（还差三步 —— 本机还没有 Nginx）${C_OFF}
 
     sudo install -D -m 644 ${INSTALL_DIR}/deploy/nginx-llmbridge.conf /etc/nginx/conf.d/llmbridge.conf
     sudo nginx -t && sudo systemctl reload nginx
+
+${NGINX_FAIL_REASON:+  本次自动配置未完全生效的原因：${NGINX_FAIL_REASON}}
 
   RHEL / CentOS 上装完仍打不开，通常是这两处没放行（与配置无关）：
     sudo setsebool -P httpd_can_network_connect 1      # SELinux：不放行则反代一律 502
