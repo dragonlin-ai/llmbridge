@@ -44,7 +44,7 @@
 #  选项：
 #    --dir <path>       部署目录（默认 ./llmbridge；目录内已是仓库时直接复用）
 #    --ref <ref>        源码版本：分支 / tag（默认 main）
-#    --port <n>         控制台对外端口（默认 80）
+#    --port <n>         控制台对外端口（默认 8081）
 #    --pg-password <p>  PostgreSQL 密码（默认随机 32 位）
 #    --skip-frontend    跳过前端构建（仅在你已有 admin-web/dist 时使用）
 #    --image            容器库形态：不下载源码、不构建前端。编排文件已内嵌在本脚本里，
@@ -92,7 +92,7 @@ NODE_IMAGE="node:22-alpine"
 
 DEPLOY_DIR="./llmbridge"
 REF="$DEFAULT_REF"
-HTTP_PORT="80"
+HTTP_PORT="8081"
 PORT_GIVEN="false"
 PG_PASSWORD=""
 SKIP_FRONTEND="false"

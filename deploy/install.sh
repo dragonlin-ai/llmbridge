@@ -21,7 +21,7 @@
 #    --with-models      预置厂商目录时一并灌入参考模型（默认只铺接入通道）
 #    --skip-frontend    不构建控制台前端（仅后端；界面需自行备好 admin-web/dist）
 #    --frontend-only    只构建控制台前端后退出（会顺带把 Node.js / Nginx 一并补齐）
-#    --nginx-port <n>   Nginx 对外端口（默认 80）
+#    --nginx-port <n>   Nginx 对外端口（默认 8081）
 #    --no-nginx         不自动安装 / 配置系统 Nginx（改用你已有的 web 服务器）
 #    --no-node-install  不自动安装 Node.js（只用机器上已有的）
 #    --node-version <v> 指定要安装的 Node.js 版本（如 v22.14.0）
@@ -92,7 +92,7 @@ NO_SERVICE="false"
 ASSUME_YES="false"
 SKIP_FRONTEND="false"
 FRONTEND_ONLY="false"
-NGINX_PORT="80"
+NGINX_PORT="8081"
 NO_NGINX="false"             # --no-nginx：不自动装/配 Nginx
 NO_NODE_INSTALL="false"      # --no-node-install：不自动装 Node.js
 NODE_VERSION_ARG=""          # --node-version
@@ -418,7 +418,7 @@ write_env() {
 # 注意：不要写 postgresql+asyncpg://（asyncpg 不在依赖里，会在建连时才失败）
 DATABASE_URL=${db_url}
 POSTGRES_PASSWORD=
-HTTP_PORT=80
+HTTP_PORT=8081
 
 # ---- 首次运行引导 ----
 # 启动时自动建表 + 建默认管理员(admin/admin123) + 预置厂商接入目录，三步幂等。

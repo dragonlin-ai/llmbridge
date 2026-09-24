@@ -4,6 +4,19 @@
 
 ## [未发布]
 
+### 控制台对外默认端口 80 → 8081
+
+- **变更**：后台管理端（控制台）的对外入口端口默认值由 `80` 改为 `8081`。
+  - `deploy/install.sh`：`NGINX_PORT` 默认 `80` → `8081`；写入 `.env` 的 `HTTP_PORT` 同步 `80` → `8081`。
+  - `deploy/docker-deploy.sh`：`HTTP_PORT` 默认 `80` → `8081`；两个 compose（`docker-compose.yml` / `docker-compose.image.yml`）的 `${HTTP_PORT:-80}` → `${HTTP_PORT:-8081}`。
+  - 仍可用 `--nginx-port <n>`（裸机）/ `--port <n>`（容器）显式换端口；非 80 端口时 `print_summary` 自动在地址后补 `:<port>` 后缀。
+  - SELinux 端口登记逻辑不变：8081 落进「非标准端口」分支，RHEL/CentOS 上安装会自动 `semanage port -a -t http_port_t -p tcp 8081`，避免 nginx 绑定被拦。
+- **文档同步**：README（中英）、`05-安装打包说明.md` 的「默认 80」控制台端口表述全部改为 `8081`（含变量表与端口一致性核对）。`docs/README.md` 的 V1.6.2~V1.6.6 历史变更记录保持原样（那是当时事实）。
+- **注意**：本改动只改**默认值**，不影响已在运行的实例。已装在 80 的机器要迁移到 8081，二选一：
+  ① 重新跑 `sudo bash /opt/llmbridge/deploy/install.sh --nginx-port 8081`（会重新渲染站点配置并处理 SELinux/防火墙）；
+  ② 手工把 `/etc/nginx/conf.d/llmbridge.conf` 的 `listen 80;` 改成 `listen 8081;`，`nginx -t && systemctl reload nginx`，并在防火墙/安全组放行 8081。
+- **范围**：纯部署/文档层，**未动任何接口、表结构或判定口径**。
+
 ### 修掉前端构建在服务器上必挂：调用日志页面被 .gitignore 误吞 + Node 探测兜底
 
 - **根因**：`.gitignore` 里有一条裸 `logs/`（本意是忽略仓库根目录的运行时日志），

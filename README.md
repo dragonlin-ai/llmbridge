@@ -299,7 +299,7 @@ sudo bash deploy/install.sh
 sudo bash deploy/install.sh --port 9000            # 后端改监听 9000
 sudo bash deploy/install.sh --dir /srv/llmbridge   # 换安装目录（默认 /opt/llmbridge）
 sudo bash deploy/install.sh --postgres "postgresql+psycopg://user:pass@127.0.0.1:5432/llmbridge"
-sudo bash deploy/install.sh --nginx-port 8080      # 控制台对外端口（默认 80）
+sudo bash deploy/install.sh --nginx-port 8080      # 控制台对外端口（默认 8081）
 sudo bash deploy/install.sh --no-nginx             # 不自动装/配 Nginx（改用你已有的 web 服务器）
 sudo bash deploy/install.sh --no-node-install      # 不自动装 Node.js（用机器上已有的）
 sudo bash deploy/install.sh --node-version v22.14.0  # 指定要装的 Node.js 版本
@@ -402,7 +402,7 @@ curl -sSL https://raw.githubusercontent.com/dragonlin-ai/llmbridge/main/deploy/d
 常用选项与子命令：
 
 ```bash
-bash deploy/docker-deploy.sh --port 8080        # 控制台对外端口（默认 80）
+bash deploy/docker-deploy.sh --port 8080        # 控制台对外端口（默认 8081）
 bash deploy/docker-deploy.sh --dir /srv/llmbridge
 bash deploy/docker-deploy.sh --skip-frontend    # 已有 admin-web/dist 时跳过构建
 bash deploy/docker-deploy.sh status             # 容器状态 + 健康检查
@@ -425,7 +425,7 @@ cp .env.example .env
 #     python -c "import secrets;print(secrets.token_urlsafe(32))"
 #     openssl rand -base64 32
 #   POSTGRES_PASSWORD：与 DATABASE_URL 里的密码保持一致
-#   HTTP_PORT：控制台对外端口（默认 80）
+#   HTTP_PORT：控制台对外端口（默认 8081）
 
 # 3) 构建前端（nginx 挂载 admin-web/dist，不构建则控制台空白）
 cd admin-web && npm ci && npm run build && cd ..
@@ -473,7 +473,7 @@ SQLite 形态（方式一默认、方式三默认）直接拷 `<数据目录>/ll
 
 #### 访问
 
-浏览器打开 `http://<服务器IP>:<HTTP_PORT>/`（`HTTP_PORT` 默认 80），
+浏览器打开 `http://<服务器IP>:<HTTP_PORT>/`（`HTTP_PORT` 默认 8081），
 默认账号 `admin / admin123`。对外 API 也在同一入口下：`http://<IP>:<HTTP_PORT>/v1/chat/completions`。
 
 #### 升级
@@ -570,7 +570,7 @@ docker run --rm --entrypoint cat \
 ```bash
 LB='docker run --rm --entrypoint cat registry.cn-hangzhou.aliyuncs.com/winyeahs/llmbridge-api:1.0.0 /opt/llmbridge/deploy/docker-deploy.sh'
 
-$LB | bash -s -- --image               # 安装（默认端口 80、部署到 ./llmbridge）
+$LB | bash -s -- --image               # 安装（默认端口 8081、部署到 ./llmbridge）
 $LB | bash -s -- --image --port 8080   # 换控制台端口
 $LB | bash -s -- --image --dir /srv/llmbridge
 $LB | bash -s -- --image --tag 1.0.0-<git短sha>   # 锁不可变版本
@@ -818,7 +818,7 @@ python scripts/build_release.py --no-archive       # 只组装目录，不压 zi
 |---|---|---|
 | `DATABASE_URL` | `sqlite:///./llmbridge.db` | PostgreSQL 用 `postgresql+psycopg://…`（**勿写 asyncpg**）；生产必改 |
 | `POSTGRES_PASSWORD` | `change-me` | 仅 Docker Compose 形态使用（注入 db 与 api 容器） |
-| `HTTP_PORT` | `80` | 仅 Docker Compose 形态：控制台对外端口 |
+| `HTTP_PORT` | `8081` | 仅 Docker Compose 形态：控制台对外端口 |
 | `AUTO_BOOTSTRAP` | `true` | 启动时自动建表 / 建管理员 / 预置接入商，幂等。生产由 DBA 管库时可设 `false` |
 | `JWT_SECRET` | `dev-only-change-me` | **生产必改**。控制台会话签名密钥 |
 | `ENCRYPTION_MASTER_KEY` | `dev-only-change-me…` | **生产必改**。厂商 Key 的 AES-256-GCM 主密钥，**丢失不可恢复** |

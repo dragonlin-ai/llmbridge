@@ -328,7 +328,7 @@ Common options:
 sudo bash deploy/install.sh --port 9000            # backend listens on 9000
 sudo bash deploy/install.sh --dir /srv/llmbridge   # install dir (default /opt/llmbridge)
 sudo bash deploy/install.sh --postgres "postgresql+psycopg://user:pass@127.0.0.1:5432/llmbridge"
-sudo bash deploy/install.sh --nginx-port 8080      # console port (default 80)
+sudo bash deploy/install.sh --nginx-port 8080      # console port (default 8081)
 sudo bash deploy/install.sh --no-nginx             # do not install/configure Nginx; use your own
 sudo bash deploy/install.sh --no-node-install      # do not install Node.js; use the existing one
 sudo bash deploy/install.sh --node-version v22.14.0  # pin the Node.js version to install
@@ -438,7 +438,7 @@ and prints the access URL.
 Options and subcommands:
 
 ```bash
-bash deploy/docker-deploy.sh --port 8080        # console port (default 80)
+bash deploy/docker-deploy.sh --port 8080        # console port (default 8081)
 bash deploy/docker-deploy.sh --dir /srv/llmbridge
 bash deploy/docker-deploy.sh --skip-frontend    # when admin-web/dist already exists
 bash deploy/docker-deploy.sh status             # container status + health check
@@ -461,7 +461,7 @@ cp .env.example .env
 #     python -c "import secrets;print(secrets.token_urlsafe(32))"
 #     openssl rand -base64 32
 #   POSTGRES_PASSWORD — must match the password inside DATABASE_URL
-#   HTTP_PORT — public console port (default 80)
+#   HTTP_PORT — public console port (default 8081)
 
 # 3) Build the frontend (nginx bind-mounts admin-web/dist; without it the console is blank)
 cd admin-web && npm ci && npm run build && cd ..
@@ -511,7 +511,7 @@ For the SQLite forms (Option 1 default, Option 3 default), just copy `<data dir>
 
 #### Access
 
-Open `http://<server-ip>:<HTTP_PORT>/` (`HTTP_PORT` defaults to 80) and log in with
+Open `http://<server-ip>:<HTTP_PORT>/` (`HTTP_PORT` defaults to 8081) and log in with
 `admin / admin123`. The public API lives at the same entrypoint:
 `http://<ip>:<HTTP_PORT>/v1/chat/completions`.
 
@@ -623,7 +623,7 @@ Variants and day-2 operations (record the pipe once, reuse it for every subcomma
 ```bash
 LB='docker run --rm --entrypoint cat registry.cn-hangzhou.aliyuncs.com/winyeahs/llmbridge-api:1.0.0 /opt/llmbridge/deploy/docker-deploy.sh'
 
-$LB | bash -s -- --image               # install (port 80, deploy dir ./llmbridge)
+$LB | bash -s -- --image               # install (port 8081, deploy dir ./llmbridge)
 $LB | bash -s -- --image --port 8080   # different console port
 $LB | bash -s -- --image --dir /srv/llmbridge
 $LB | bash -s -- --image --tag 1.0.0-<git-short-sha>
@@ -883,7 +883,7 @@ The ones that matter most:
 |---|---|---|
 | `DATABASE_URL` | `sqlite:///./llmbridge.db` | Use `postgresql+psycopg://…` for PostgreSQL (**never asyncpg**). Change in production |
 | `POSTGRES_PASSWORD` | `change-me` | Docker Compose only (injected into the db and api containers) |
-| `HTTP_PORT` | `80` | Docker Compose only: public console port |
+| `HTTP_PORT` | `8081` | Docker Compose only: public console port |
 | `AUTO_BOOTSTRAP` | `true` | Create schema / admin / vendor catalog on startup, idempotent. Set `false` when a DBA owns the database |
 | `JWT_SECRET` | `dev-only-change-me` | **Change in production.** Console session signing key |
 | `ENCRYPTION_MASTER_KEY` | `dev-only-change-me…` | **Change in production.** AES-256-GCM master key for vendor keys — **unrecoverable if lost** |
