@@ -250,7 +250,7 @@ POST https://api.typesafe.ai/v1/systemone        // Authorization: Bearer $JEV_A
 
 | 方式 | 适用场景 | 前置依赖 | 一句话 |
 |---|---|---|---|
-| **方式一 · 脚本安装**（推荐） | Linux 服务器生产部署 | Linux + Python 3.11+（可选 Node.js 20+） | 一条 `curl` 装完 |
+| **方式一 · 脚本安装**（推荐） | Linux 服务器生产部署 | Linux + Python 3.11+ | 一条 `curl` 装完 |
 | **方式二 · Docker Compose**（推荐） | 任意平台生产部署、想省去环境折腾 | Docker + Compose v2 | 一条 `curl` 起全栈 |
 | └ 形态 A · 源码构建 | 目标机有源码、要改代码 | 同上 | `up -d --build` |
 | └ 形态 B · 容器库镜像 | **目标机不需要任何源码**，适合交付给客户 | 同上，且能访问容器库 | 一条 `docker run` 装完 |
@@ -264,8 +264,9 @@ POST https://api.typesafe.ai/v1/systemone        // Authorization: Bearer $JEV_A
 ### 方式一：脚本安装（推荐）
 
 面向 **Linux 裸机**（systemd）。脚本自动完成：拉取源码 → 建运行用户 → 建虚拟环境 →
-装依赖 → 生成 `.env`（随机密钥）→ 初始化数据 → 构建控制台前端 → 注册并启动 systemd 服务 →
-**自动安装并配置 Nginx**（写站点配置、放行 SELinux 与防火墙）→ **打印控制台地址**。
+装依赖 → 生成 `.env`（随机密钥）→ 初始化数据 → **自动安装 Node.js 并构建控制台前端** →
+注册并启动 systemd 服务 → **自动安装并配置 Nginx**（写站点配置、放行 SELinux 与防火墙）→
+**打印控制台地址**。
 
 也就是说：**装完就能用，不需要你再手工敲任何命令** —— 结束时直接给出
 `控制台地址  http://<服务器IP>/`，浏览器打开即是后台管理界面。
@@ -274,7 +275,9 @@ POST https://api.typesafe.ai/v1/systemone        // Authorization: Bearer $JEV_A
 
 - Linux（systemd 发行版；无 systemd 会提示改用 `--no-service`）
 - Python **3.11+**（脚本会检测；不满足时给出各发行版的安装命令）
-- **Node.js 20+**（用于构建控制台前端；缺失时脚本会明确告警并给出补装办法）
+- Node.js —— **无需预装**：脚本先试发行版仓库，版本不够就下载官方预编译包
+  （先官方源、不通再走国内镜像），装进 `/usr/local/lib/nodejs` 并软链到 `/usr/local/bin`，
+  **不动系统包管理已有的文件**。要自己管 Node 就用 `--no-node-install`
 - Nginx —— **无需预装**：脚本会用系统包管理器自动装好并配置
   （`apt` / `dnf` / `yum` / `zypper` / `apk`）。若你想用自己的 web 服务器，加 `--no-nginx` 跳过
 
@@ -298,9 +301,12 @@ sudo bash deploy/install.sh --dir /srv/llmbridge   # 换安装目录（默认 /o
 sudo bash deploy/install.sh --postgres "postgresql+psycopg://user:pass@127.0.0.1:5432/llmbridge"
 sudo bash deploy/install.sh --nginx-port 8080      # 控制台对外端口（默认 80）
 sudo bash deploy/install.sh --no-nginx             # 不自动装/配 Nginx（改用你已有的 web 服务器）
+sudo bash deploy/install.sh --no-node-install      # 不自动装 Node.js（用机器上已有的）
+sudo bash deploy/install.sh --node-version v22.14.0  # 指定要装的 Node.js 版本
+sudo bash deploy/install.sh --npm-registry https://registry.npmmirror.com  # 固定 npm 源
 sudo bash deploy/install.sh --with-models          # 额外灌入目录里的参考模型与参考单价
 sudo bash deploy/install.sh --skip-frontend        # 不构建前端（自备 dist 时）
-sudo bash deploy/install.sh --frontend-only        # 只补构建前端，其它一律不碰
+sudo bash deploy/install.sh --frontend-only        # 只补前端构建（顺带把 Node.js / Nginx 补齐）
 sudo bash deploy/install.sh --no-service           # 只铺代码与虚拟环境，不注册 systemd
 sudo bash deploy/install.sh --help
 ```
@@ -344,7 +350,7 @@ sudo bash deploy/install.sh --help
 curl -sSL https://raw.githubusercontent.com/dragonlin-ai/llmbridge/main/deploy/install.sh | sudo bash
 ```
 
-补构建前端（例如装完 Node.js 之后）：
+若上次卡在「前端没构建 / Nginx 没配好」，这条命令会把两件事一次补齐（不动其它任何东西）：
 
 ```bash
 sudo bash /opt/llmbridge/deploy/install.sh --frontend-only
@@ -716,7 +722,7 @@ vim ./llmbridge-data/.env      # 改 DATABASE_URL=postgresql+psycopg://user:pass
 | 组件 | 版本 |
 |---|---|
 | Python | **3.11+** |
-| Node.js | 20+（仅控制台前端需要） |
+| Node.js | 20+（仅控制台前端需要；脚本安装形态会自动装） |
 | PostgreSQL | 14+（不装则自动回退 SQLite） |
 | Redis | 7+（可选） |
 

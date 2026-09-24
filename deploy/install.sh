@@ -20,9 +20,13 @@
 #    --postgres <url>   直接指定 PostgreSQL 连接串；不指定则用 SQLite（开箱即用）
 #    --with-models      预置厂商目录时一并灌入参考模型（默认只铺接入通道）
 #    --skip-frontend    不构建控制台前端（仅后端；界面需自行备好 admin-web/dist）
-#    --frontend-only    只构建控制台前端后退出（补装 Node.js 后可单独跑这一步）
+#    --frontend-only    只构建控制台前端后退出（会顺带把 Node.js / Nginx 一并补齐）
 #    --nginx-port <n>   Nginx 对外端口（默认 80）
 #    --no-nginx         不自动安装 / 配置系统 Nginx（改用你已有的 web 服务器）
+#    --no-node-install  不自动安装 Node.js（只用机器上已有的）
+#    --node-version <v> 指定要安装的 Node.js 版本（如 v22.14.0）
+#    --node-mirror <u>  只用指定的 Node.js 下载镜像（默认先试官方、再试国内镜像）
+#    --npm-registry <u> npm 源（默认官方源，失败会自动用国内镜像重试一次）
 #    --no-service       只铺代码与虚拟环境，不安装/启动 systemd 服务
 #    --uninstall        卸载（保留数据目录）
 #    --purge            卸载并**删除**安装目录与数据（不可恢复，二次确认）
@@ -37,8 +41,11 @@
 #
 #  1) 必须构建控制台前端。后端只提供 /v1 与 /admin 两套**接口**，不托管静态文件；
 #     控制台是一个独立的 Vue SPA，其构建产物（admin-web/dist）需要 web 服务器托管。
-#     本脚本会在有 Node.js(>=20) 时自动构建；没有则明确告警并给出补装办法 ——
-#     绝不静默跳过，否则现象是「服务正常、浏览器打开一片空白」，极难归因。
+#     本脚本**把这件事也一次做到底**：没装 Node.js（或版本 < 20）就自动装 ——
+#     先试发行版仓库，版本不够则下载官方预编译包（先官方源、不通再走国内镜像），
+#     装进 /usr/local/lib/nodejs 并软链到 /usr/local/bin，不动系统包管理的既有文件。
+#     任一环节失败都会明确告警并给出补装办法，绝不静默跳过 ——
+#     否则现象是「服务正常、浏览器打开一片空白」，极难归因。
 #
 #  2) 必须有一个 web 服务器把 dist 托起来并把 /v1、/admin 反代到后端。
 #     本脚本**把这件事一次做到底**：没装 Nginx 就自动装（apt/dnf/yum/zypper/apk），
@@ -65,6 +72,13 @@ DEFAULT_USER="llmbridge"
 SERVICE_NAME="llmbridge"
 UNIT_PATH="/etc/systemd/system/${SERVICE_NAME}.service"
 PY_MIN_MINOR=11   # 需要 Python >= 3.11（pyproject.toml 的 requires-python）
+NODE_MIN_MAJOR=20 # 前端构建需要 Node.js >= 20
+# 要下载的 Node.js 版本：按顺序尝试，前一个 404 就退到下一个 ——
+# 单一硬编码版本一旦从官方归档下线（Node 每个大版本都会被清），整条自动安装链就断了。
+NODE_CANDIDATES="v22.14.0 v22.12.0 v20.18.0"
+# 预编译包与软链的落点，可用环境变量覆盖（便于测试与「不动 /usr/local」的部署）。
+NODE_INSTALL_ROOT="${LLMBRIDGE_NODE_ROOT:-/usr/local/lib/nodejs}"
+NODE_LINK_DIR="${LLMBRIDGE_NODE_BIN_DIR:-/usr/local/bin}"
 
 # ---- 运行参数（可被命令行/环境变量覆盖）----
 REF="${LLMBRIDGE_REF:-$DEFAULT_REF}"
@@ -80,10 +94,18 @@ SKIP_FRONTEND="false"
 FRONTEND_ONLY="false"
 NGINX_PORT="80"
 NO_NGINX="false"             # --no-nginx：不自动装/配 Nginx
+NO_NODE_INSTALL="false"      # --no-node-install：不自动装 Node.js
+NODE_VERSION_ARG=""          # --node-version
+NODE_MIRROR=""               # --node-mirror：非空则只用这个镜像
+NPM_REGISTRY=""              # --npm-registry：非空则固定用这个源
 FRONTEND_OK="false"          # 由 build_frontend 置位，供结束摘要判断怎么提示
 NGINX_CONF_READY="false"     # 由 write_nginx_conf 置位
 NGINX_READY="false"          # 由 ensure_nginx 置位：站点真的对外可用了
 NGINX_URL=""                 # 控制台访问地址（只有装成功才有值）
+NODE_VER=""                  # detect_node 命中后填
+NODE_HOME=""                 # 自动安装的 Node.js 根目录（仅自动装时有值）
+NODE_BIN=""                  # node 可执行文件绝对路径
+NPM_BIN=""                   # npm 可执行文件绝对路径
 ACTION="install"
 
 # ---- 输出工具（颜色在非 TTY 时自动关闭，避免污染管道）----
@@ -140,6 +162,10 @@ while [ $# -gt 0 ]; do
         --frontend-only) FRONTEND_ONLY="true"; shift ;;
         --nginx-port) NGINX_PORT="${2:?--nginx-port 需要参数}"; shift 2 ;;
         --no-nginx)   NO_NGINX="true"; shift ;;
+        --no-node-install) NO_NODE_INSTALL="true"; shift ;;
+        --node-version) NODE_VERSION_ARG="${2:?--node-version 需要参数}"; shift 2 ;;
+        --node-mirror)  NODE_MIRROR="${2:?--node-mirror 需要参数}"; shift 2 ;;
+        --npm-registry) NPM_REGISTRY="${2:?--npm-registry 需要参数}"; shift 2 ;;
         --no-service) NO_SERVICE="true"; shift ;;
         --uninstall)  ACTION="uninstall"; shift ;;
         --purge)      ACTION="uninstall"; PURGE="true"; shift ;;
@@ -161,7 +187,7 @@ esac
 # =============================================================================
 
 need_root() {
-    [ "$(id -u)" -eq 0 ] || die "需要 root 权限。请用：sudo bash $0 $ORIG_ARGS"
+    [ "$(id -u)" -eq 0 ] || die "需要 root 权限。请用：$(self_cmd) $ORIG_ARGS"
 }
 
 detect_python() {
@@ -450,7 +476,201 @@ detect_node() {
     NODE_VER="$(node -v 2>/dev/null | sed 's/^v//')"
     local major="${NODE_VER%%.*}"
     # 非数字（版本串异常）时 -ge 会报语法错，整个 test 的 stderr 丢掉即可。
-    [ -n "$major" ] && [ "$major" -ge 20 ] 2>/dev/null
+    [ -n "$major" ] && [ "$major" -ge "$NODE_MIN_MAJOR" ] 2>/dev/null || return 1
+    NODE_BIN="$(command -v node)"
+    NPM_BIN="$(command -v npm)"
+    return 0
+}
+
+download_tool() {
+    if command -v curl >/dev/null 2>&1; then
+        echo curl
+    elif command -v wget >/dev/null 2>&1; then
+        echo wget
+    else
+        return 1
+    fi
+}
+
+do_download() {
+    local url="$1" out="$2" tool
+    tool="$(download_tool)" || return 1
+    if [ "$tool" = "curl" ]; then
+        curl -fsSL --connect-timeout 15 --max-time 900 -o "$out" "$url"
+    else
+        wget -q --timeout=60 -O "$out" "$url"
+    fi
+}
+
+node_tarball_arch() {
+    case "$(uname -m)" in
+        x86_64|amd64)  echo "linux-x64" ;;
+        aarch64|arm64) echo "linux-arm64" ;;
+        armv7l|armv7)  echo "linux-armv7l" ;;
+        *)             echo "" ;;
+    esac
+}
+
+install_node_pkg() {
+    if command -v apt-get >/dev/null 2>&1; then
+        DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs npm
+    elif command -v dnf >/dev/null 2>&1; then
+        dnf install -y nodejs npm
+    elif command -v yum >/dev/null 2>&1; then
+        yum install -y nodejs npm
+    elif command -v zypper >/dev/null 2>&1; then
+        zypper --non-interactive install -y nodejs npm
+    elif command -v apk >/dev/null 2>&1; then
+        apk add --no-cache nodejs npm
+    else
+        return 1
+    fi
+}
+
+node_link_bins() {
+    local dir="$1" b
+    for b in node npm npx; do
+        [ -x "$dir/bin/$b" ] || continue
+        # 已存在同名**实体文件**（包管理器装的、或前人手工放的）时绝不覆盖：
+        # 覆盖它等于悄悄改掉机器上其它工具依赖的 node，风险远大于收益。
+        if [ -e "$NODE_LINK_DIR/$b" ] && [ ! -L "$NODE_LINK_DIR/$b" ]; then
+            info "$NODE_LINK_DIR/$b 已存在且非软链，保持不动（本次构建用绝对路径调用）"
+            continue
+        fi
+        # 注意 ln -s 的失败可能是**静默**的（部分文件系统/容器不允许建符号链接，
+        # 某些兼容层还会产出一个 0 字节的空文件并返回 0）。所以不能只看退出码，
+        # 还要验一下链接真的可执行；失败也不致命 —— 下面会 export PATH，
+        # 构建走的是绝对路径，不依赖这个软链。
+        if ! ln -sf "$dir/bin/$b" "$NODE_LINK_DIR/$b" 2>/dev/null || [ ! -x "$NODE_LINK_DIR/$b" ]; then
+            warn "$NODE_LINK_DIR/$b 未生效（本机可能不允许创建符号链接）—— 本次构建用绝对路径调用，不受影响"
+        fi
+    done
+}
+
+install_node_tarball() {
+    local arch ver base bases url tmpdir dest try_list
+    arch="$(node_tarball_arch)"
+    if [ -z "$arch" ]; then
+        warn "未识别的 CPU 架构 $(uname -m)，无法使用官方预编译包。"
+        return 1
+    fi
+    if ! download_tool >/dev/null; then
+        warn "本机既没有 curl 也没有 wget，无法下载 Node.js。"
+        return 1
+    fi
+
+    if [ -n "$NODE_VERSION_ARG" ]; then
+        try_list="$NODE_VERSION_ARG"
+    else
+        try_list="${NODE_CANDIDATES:-}"
+    fi
+    [ -n "$try_list" ] || return 1
+
+    for ver in $try_list; do
+        if [ -n "$NODE_MIRROR" ]; then
+            bases="$NODE_MIRROR"
+        else
+            # 官方源优先；连不上再走国内镜像（与 npm 侧同一套思路）。
+            bases="https://nodejs.org/dist https://npmmirror.com/mirrors/node"
+        fi
+        for base in $bases; do
+            base="${base%/}"
+            url="${base}/${ver}/node-${ver}-${arch}.tar.gz"
+            tmpdir="$(mktemp -d)"
+            info "下载 Node.js ${ver}（来源 ${base}）…"
+            if ! do_download "$url" "$tmpdir/node.tar.gz"; then
+                warn "下载失败：$url"
+                rm -rf "$tmpdir"
+                continue
+            fi
+            dest="${NODE_INSTALL_ROOT}/node-${ver}-${arch}"
+            if ! { mkdir -p "$dest" && tar -xzf "$tmpdir/node.tar.gz" -C "$dest" --strip-components=1; }; then
+                warn "解压失败：$tmpdir/node.tar.gz"
+                rm -rf "$tmpdir" "$dest"
+                continue
+            fi
+            rm -rf "$tmpdir"
+            node_link_bins "$dest"
+            NODE_HOME="$dest"
+            # 本次进程内让 node/npm 先被解析到新装的那份：npm 的 shebang 是
+            # `#!/usr/bin/env node`，若 PATH 里旧 node 仍排在前面，npm ci 会拿**旧版本**
+            # 的 node 去跑新 npm，报的是一堆语法错 —— 现象与成因相隔极远，极难归因。
+            export PATH="$dest/bin:$PATH"
+            NODE_BIN="$dest/bin/node"
+            NPM_BIN="$dest/bin/npm"
+            ok "Node.js ${ver} 已就位：$dest"
+            return 0
+        done
+    done
+    return 1
+}
+
+ensure_node() {
+    if detect_node; then
+        info "已检测到 Node.js v${NODE_VER}（${NODE_BIN}）"
+        return 0
+    fi
+    if [ "$NO_NODE_INSTALL" = "true" ]; then
+        warn "已指定 --no-node-install：跳过 Node.js 自动安装。"
+        return 1
+    fi
+
+    step "安装 Node.js（构建控制台前端所需，>= ${NODE_MIN_MAJOR}）"
+
+    # 1) 先试发行版仓库：最快、走本地镜像源，Alpine 也只有这条路。
+    #    代价是版本常常偏旧（Ubuntu 20.04 是 v10、CentOS 7 是 v10），装完必须再验版本。
+    if install_node_pkg 2>/dev/null; then
+        if detect_node; then
+            ok "已通过系统包管理器安装 Node.js v${NODE_VER}"
+            return 0
+        fi
+        info "发行版仓库提供的 Node.js 低于 ${NODE_MIN_MAJOR}，改用官方预编译包。"
+    fi
+
+    # 2) 官方预编译二进制：不依赖发行版仓库的版本，也不碰系统包管理的既有文件。
+    if install_node_tarball && detect_node; then
+        return 0
+    fi
+
+    return 1
+}
+
+# 通过管道执行（curl … | sudo bash）时 $0 是 "bash"，拿它拼出的补构建命令会变成
+# `sudo bash bash --frontend-only` —— 用户照抄必然失败，还会以为脚本坏了。
+# 安装目录里的副本路径确定且必然存在，优先用它拼命令。
+self_cmd() {
+    if [ -f "$INSTALL_DIR/deploy/install.sh" ]; then
+        printf 'sudo bash %s/deploy/install.sh' "$INSTALL_DIR"
+    elif [ -f "$0" ]; then
+        printf 'sudo bash %s' "$0"
+    else
+        printf 'sudo bash %s/deploy/install.sh' "$INSTALL_DIR"
+    fi
+}
+
+_frontend_finalize() {
+    local dist="$INSTALL_DIR/admin-web/dist"
+    if [ -f "$dist/index.html" ]; then
+        # frontend-only 场景下运行用户未必还在，chown 失败不该让整个脚本挂掉。
+        if id -u "$RUN_USER" >/dev/null 2>&1; then
+            chown -R "$RUN_USER:$RUN_USER" "$INSTALL_DIR/admin-web" 2>/dev/null || true
+        fi
+        FRONTEND_OK="true"
+        ok "前端产物就绪：$dist"
+        return 0
+    fi
+    warn "构建命令返回成功，但未找到 $dist/index.html —— 请核对 admin-web/vite.config.ts 的 outDir。"
+    return 1
+}
+
+_npm_build() {
+    local registry="${1:-}" extra=""
+    if [ -n "$registry" ]; then
+        extra="--registry=$registry"
+    fi
+    ( cd "$INSTALL_DIR/admin-web" && \
+      "$NPM_BIN" ci --no-audit --no-fund $extra && \
+      "$NPM_BIN" run build )
 }
 
 build_frontend() {
@@ -466,16 +686,18 @@ build_frontend() {
         return 0
     fi
 
-    if ! detect_node; then
+    # 要构建就必须有 Node.js —— 缺了自动装，装不上才告警。
+    # 「装完发现界面打不开、还要再敲一条命令」正是本脚本要消灭的现象。
+    if ! ensure_node; then
         cat >&2 <<EOF
 
-${C_YELLOW}[警告] 未找到 Node.js >= 20，跳过控制台前端构建。${C_OFF}
+${C_YELLOW}[警告] 未能准备可用的 Node.js >= ${NODE_MIN_MAJOR}，跳过控制台前端构建。${C_OFF}
 
   后端与 /v1、/admin 接口**不受影响**，但浏览器打开控制台会是空白页。
-  补上这一步的两种办法：
+  补上这一步：
 
-  a) 装好 Node.js 后只补构建（不会动其它任何东西）：
-       sudo bash $0 --frontend-only
+  a) 装好 Node.js 后重跑（会自动构建前端，并把 Nginx 一并配好）：
+       $(self_cmd) --frontend-only
      Node.js 获取：https://nodejs.org/ （或用 nvm、发行版包管理器）
 
   b) 在任何有 Node.js 的机器上构建后拷过来：
@@ -488,17 +710,16 @@ EOF
 
     step "构建控制台前端"
     info "Node.js v${NODE_VER}；执行 npm ci && npm run build（首次约 1~3 分钟）"
-    if ( cd "$INSTALL_DIR/admin-web" && npm ci --no-audit --no-fund && npm run build ); then
-        if [ -f "$dist/index.html" ]; then
-            # frontend-only 场景下运行用户未必还在，chown 失败不该让整个脚本挂掉。
-            chown -R "$RUN_USER:$RUN_USER" "$INSTALL_DIR/admin-web" 2>/dev/null || true
-            FRONTEND_OK="true"
-            ok "前端产物就绪：$dist"
-        else
-            warn "构建命令返回成功，但未找到 $dist/index.html —— 请核对 admin-web/vite.config.ts 的 outDir。"
-        fi
+    if _npm_build "$NPM_REGISTRY"; then
+        _frontend_finalize || true
+    elif [ -z "$NPM_REGISTRY" ] && _npm_build "https://registry.npmmirror.com"; then
+        # 国内机器直连 registry.npmjs.org 常是几十 KB/s 或直接超时。
+        # 自动换镜像重试一次，用户不必先去查「npm 怎么换源」。
+        info "已改用国内镜像源 registry.npmmirror.com 完成构建（可用 --npm-registry 固定源）"
+        _frontend_finalize || true
     else
-        warn "前端构建失败（常见原因：npm 源不可达）。后端不受影响，可稍后重跑 --frontend-only。"
+        warn "前端构建失败（常见原因：npm 源不可达）。后端不受影响。"
+        warn "可指定镜像源重跑：$(self_cmd) --frontend-only --npm-registry https://registry.npmmirror.com"
     fi
 }
 
@@ -710,7 +931,7 @@ ensure_nginx() {
     if ! nginx -t >/dev/null 2>&1; then
         warn "nginx -t 未通过，站点配置未启用。报错如下："
         nginx -t
-        warn "常见原因：端口 $NGINX_PORT 已被其它服务占用。可换端口重跑：bash $0 --nginx-port 8080"
+        warn "常见原因：端口 $NGINX_PORT 已被其它服务占用。可换端口重跑：$(self_cmd) --nginx-port 8080"
         return 0
     fi
     ok "Nginx 配置语法检查通过"
@@ -825,7 +1046,7 @@ do_uninstall() {
         ok "已删除 $INSTALL_DIR"
     else
         info "安装目录已保留：$INSTALL_DIR"
-        info "如需彻底删除：sudo bash $0 --purge -y"
+        info "如需彻底删除：$(self_cmd) --purge -y"
     fi
     info "运行用户 $RUN_USER 未删除（如需：userdel $RUN_USER）"
 }
@@ -842,13 +1063,17 @@ print_summary() {
     # 控制台地址放在最顶上：用户的诉求就是「装完直接给一个能打开的地址」。
     # 只有探活成功（NGINX_READY）才写地址 —— 否则宁可明说「还没就绪」，
     # 也不要甩一个打不开的 URL 让人反复试。
+    # 措辞必须和**下方真正会打印的那个小节**对上：早先统一写「见下方『启用控制台』」，
+    # 但「前端也未构建」时下方根本没有这一节（走的是另一个分支），用户翻遍输出也找不到。
     local console_line
     if [ "$NGINX_READY" = "true" ] && [ "$FRONTEND_OK" = "true" ]; then
         console_line="  ${C_GREEN}${C_BOLD}控制台地址  ${NGINX_URL}${C_OFF}   ← 浏览器打开即后台管理界面"
     elif [ "$NGINX_READY" = "true" ]; then
-        console_line="  控制台地址  ${NGINX_URL}   （前端未构建，页面暂时空白，见下）"
+        console_line="  控制台地址  ${NGINX_URL}   （前端还没构建，页面暂时空白 —— 见下方红字）"
+    elif [ "$FRONTEND_OK" = "true" ]; then
+        console_line="  控制台地址  尚未就绪（缺 Web 服务器 —— 见下方「启用控制台」）"
     else
-        console_line="  控制台地址  尚未就绪 —— 见下方「启用控制台」"
+        console_line="  控制台地址  尚未就绪（缺前端构建 —— 见下方红字）"
     fi
 
     cat <<EOF
@@ -869,8 +1094,9 @@ ${console_line}
 EOF
 
     if [ "$NGINX_READY" = "true" ]; then
-        # 已装好：不再让用户动手，只给「想改配置时怎么办」的可选信息。
-        cat <<EOF
+        if [ "$FRONTEND_OK" = "true" ]; then
+            # 已装好：不再让用户动手，只给「想改配置时怎么办」的可选信息。
+            cat <<EOF
 ${C_BOLD}控制台已就绪${C_OFF}
 
   浏览器打开 ${C_BOLD}${NGINX_URL}${C_OFF} 即进入后台管理界面（默认账号 admin / admin123）。
@@ -878,6 +1104,18 @@ ${C_BOLD}控制台已就绪${C_OFF}
   改完之后   sudo nginx -t && sudo systemctl reload nginx
 
 EOF
+        else
+            # 站点通了、前端却没构建：若还打印「控制台已就绪」就是自相矛盾 ——
+            # 用户按提示打开地址只会看到空白页，反而更怀疑是系统坏了。
+            cat <<EOF
+${C_YELLOW}${C_BOLD}控制台前端未构建 —— 站点已通，但页面暂时空白${C_OFF}
+
+  浏览器打开 ${NGINX_URL} 会是空白页（/v1、/admin 接口本身是好的）。
+  一条命令补齐（会自动装 Node.js 并构建前端）：
+    $(self_cmd) --frontend-only
+
+EOF
+        fi
     elif [ "$FRONTEND_OK" = "true" ] && [ "$NGINX_CONF_READY" = "true" ]; then
         # 兜底：只有自动装 Nginx 没成功时才会走到这里。
         # 提示语必须按「本机有没有 nginx」分岔：
@@ -943,10 +1181,13 @@ ${C_BOLD}控制台前端已就绪${C_OFF}
 EOF
     else
         cat <<EOF
-${C_RED}${C_BOLD}控制台前端未构建 —— 浏览器暂时打不开界面（接口正常）${C_OFF}
+${C_RED}${C_BOLD}控制台前端未构建 —— 浏览器暂时打不开界面（后端接口正常）${C_OFF}
 
-  补构建（装好 Node.js >= 20 后执行，只做这一步、不影响其它任何内容）：
-    sudo bash $0 --frontend-only
+  一条命令补齐（会自动装 Node.js、构建前端，并把 Nginx 也一并配好）：
+    $(self_cmd) --frontend-only
+
+  只做这一步，不动 .env、数据库与已录入的密钥。
+  Node.js 也可自行安装（需 >= ${NODE_MIN_MAJOR}）：https://nodejs.org/
 
 EOF
     fi

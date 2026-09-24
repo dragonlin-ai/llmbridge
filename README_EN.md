@@ -274,7 +274,7 @@ Four options — pick the one that matches your environment:
 
 | Option | Best for | Prerequisites | In one line |
 |---|---|---|---|
-| **1 · Script install** (recommended) | Production on a Linux server | Linux + Python 3.11+ (Node.js 20+ optional) | one `curl` |
+| **1 · Script install** (recommended) | Production on a Linux server | Linux + Python 3.11+ | one `curl` |
 | **2 · Docker Compose** (recommended) | Production anywhere, minimal host setup | Docker + Compose v2 | one `curl` |
 | └ Form A · build from source | You have the repo on the target host and will change code | same as above | `up -d --build` |
 | └ Form B · image from a registry | **No source code on the target host** — the hand-off-friendly form | same as above, plus registry access | one `docker run` |
@@ -290,9 +290,9 @@ Four options — pick the one that matches your environment:
 
 Targets **bare-metal Linux** with systemd. The script pulls the source, creates the service
 user, builds the virtualenv, installs dependencies, generates `.env` with random secrets,
-initializes the database, builds the console frontend, registers + starts the systemd service,
-**installs and configures Nginx automatically** (writes the site config, opens SELinux and the
-firewall), and finally **prints the console URL**.
+initializes the database, **installs Node.js and builds the console frontend**, registers +
+starts the systemd service, **installs and configures Nginx automatically** (writes the site
+config, opens SELinux and the firewall), and finally **prints the console URL**.
 
 In other words: **you install it and it just works — no follow-up commands.** The run ends with
 `Console URL  http://<server-ip>/`, which opens straight into the admin UI.
@@ -301,8 +301,11 @@ In other words: **you install it and it just works — no follow-up commands.** 
 
 - Linux with systemd (without systemd the script suggests `--no-service`)
 - Python **3.11+** (detected; the script prints install commands per distro if missing)
-- **Node.js 20+** to build the console frontend (if missing the script warns loudly and
-  tells you how to finish that step later)
+- Node.js — **no need to preinstall it**: the script tries the distro repo first and falls back
+  to the official prebuilt tarball (official mirror first, then a China-friendly mirror),
+  installing into `/usr/local/lib/nodejs` and symlinking into `/usr/local/bin` —
+  **without overwriting files owned by your package manager**. Pass `--no-node-install` to manage
+  Node yourself
 - Nginx — **no need to preinstall it**: the script installs and configures it via the system
   package manager (`apt` / `dnf` / `yum` / `zypper` / `apk`). If you'd rather use your own web
   server, pass `--no-nginx` to skip this step
@@ -327,9 +330,12 @@ sudo bash deploy/install.sh --dir /srv/llmbridge   # install dir (default /opt/l
 sudo bash deploy/install.sh --postgres "postgresql+psycopg://user:pass@127.0.0.1:5432/llmbridge"
 sudo bash deploy/install.sh --nginx-port 8080      # console port (default 80)
 sudo bash deploy/install.sh --no-nginx             # do not install/configure Nginx; use your own
+sudo bash deploy/install.sh --no-node-install      # do not install Node.js; use the existing one
+sudo bash deploy/install.sh --node-version v22.14.0  # pin the Node.js version to install
+sudo bash deploy/install.sh --npm-registry https://registry.npmjs.org  # pin the npm registry
 sudo bash deploy/install.sh --with-models          # also seed the catalog's reference models/prices
 sudo bash deploy/install.sh --skip-frontend        # skip the frontend build
-sudo bash deploy/install.sh --frontend-only        # build the frontend only, touch nothing else
+sudo bash deploy/install.sh --frontend-only        # frontend build only (also fixes Node/Nginx)
 sudo bash deploy/install.sh --no-service           # lay down code + venv, do not register systemd
 sudo bash deploy/install.sh --help
 ```
@@ -377,7 +383,8 @@ Re-run the same command. **Code is updated; `.env`, the database, and stored key
 curl -sSL https://raw.githubusercontent.com/dragonlin-ai/llmbridge/main/deploy/install.sh | sudo bash
 ```
 
-Finish a deferred frontend build (e.g. after installing Node.js):
+If the previous run stopped at "frontend not built / Nginx not configured", this one command
+finishes both — and touches nothing else:
 
 ```bash
 sudo bash /opt/llmbridge/deploy/install.sh --frontend-only
@@ -779,7 +786,7 @@ For customization, extension work, or producing an offline release package.
 | Component | Version |
 |---|---|
 | Python | **3.11+** |
-| Node.js | 20+ (console frontend only) |
+| Node.js | 20+ (console frontend only; auto-installed by the script form) |
 | PostgreSQL | 14+ (falls back to SQLite automatically if absent) |
 | Redis | 7+ (optional) |
 
