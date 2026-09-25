@@ -306,6 +306,8 @@ async def chat_completions(body: ChatCompletionRequest, request: Request, db: As
         return _error(503, 3002, "routing failed", "api_error")
 
     model = ctx.final_model
+    # 故障转移候选：仅 auto 路由模式参与 failover；显式指定 model 时尊重用户选择，不顺带其他模型
+    fallback_candidates = candidates if body.model == "auto" else []
     provider = providers.get(model.provider_id)
     if provider is None:
         return _error(503, 3002, "model provider unavailable", "api_error")
@@ -323,7 +325,7 @@ async def chat_completions(body: ChatCompletionRequest, request: Request, db: As
             # 密文非法/密钥不匹配 = 上游不可用，走降级而非 5xx 裸抛
             logbuffer.enqueue(_log_entry(ctx, input_text, model, status="error",
                                          reason="KEY_DECRYPT_FAILED", started=started))
-            return await _chat_with_fallback(body, request, db, ctx, refs, rules, providers, candidates, started)
+            return await _chat_with_fallback(body, request, db, ctx, refs, rules, providers, fallback_candidates, started)
         try:
             adapter = get_adapter()
             result, tool_stats = await _chat_with_tools(
@@ -347,7 +349,7 @@ async def chat_completions(body: ChatCompletionRequest, request: Request, db: As
             # 一点线索都没有，只能靠猜（本轮就踩过：NameError 被兜底成 502）。
             logger.warning("primary upstream failed trace=%s model=%s detail=%s",
                            ctx.trace_id, model.model_name, e)
-            return await _chat_with_fallback(body, request, db, ctx, refs, rules, providers, candidates, started)
+            return await _chat_with_fallback(body, request, db, ctx, refs, rules, providers, fallback_candidates, started)
         except Exception:
             logger.exception("upstream unexpected error")
             logbuffer.enqueue(_log_entry(ctx, input_text, model, status="error",
@@ -358,12 +360,16 @@ async def chat_completions(body: ChatCompletionRequest, request: Request, db: As
                                                    "type": "api_error", "code": 3002}},
                                 headers=_router_headers(ctx))
 
-    # ---- 流式（SSE）----
-    return await _stream_response(body, request, provider, model, ctx, started, input_text)
+    # ---- 流式（SSE）---- 含候选池故障转移（failover）
+    return await _stream_response(body, request, ctx, started, input_text, fallback_candidates, providers)
 
 
 async def _chat_with_fallback(body, request, db, ctx, refs, rules, providers, candidates, started):
-    """目标模型失败 → 按 priority 降级重试（最多 2 轮候选）。
+    """目标模型失败 → 按 priority 遍历候选池逐个重试，直到命中一个可用或穷尽。
+
+    故障转移（failover）与「路由判定」是两回事：判定（L1/L2/L3）在首 token 前已定死首选，
+    这里只在首选不可用时换一个候选执行，不改变判定结果。候选按 priority 升序尝试，
+    命中第一个可用的即返回，满足「一个模型不通自动切到好的」。
 
     注意 id 空间：`candidates` 是 ModelRef（键为 **model_id**），
     `providers` 是以 **provider_id** 为键的字典——必须用 `candidate.provider_id` 查厂商。
@@ -371,14 +377,10 @@ async def _chat_with_fallback(body, request, db, ctx, refs, rules, providers, ca
     settings = get_settings()
     input_text = "\n".join(m.content for m in body.messages if m.role == "user")
     tried = {ctx.final_model.id}
-    rounds = 0
     for candidate in candidates:
-        if rounds >= 2:  # 基线：最多 2 轮候选
-            break
         if candidate.id in tried or candidate.provider_id not in providers:
             continue
         tried.add(candidate.id)
-        rounds += 1
         provider = providers[candidate.provider_id]
         # 注意：此处**不**提前改写 ctx.final_model。
         # 它是决策结果，也是 502 响应头 x-router-model 与落库 final_model_id 的取值来源；
@@ -561,125 +563,181 @@ async def _stream_round(*, adapter, provider, api_key, model, payload, request, 
     outcome["kind"] = "tool" if (outcome["tool_calls"] or mode == "tool") else "text"
 
 
-async def _stream_response(body, request, provider, model, ctx, started, input_text):
+async def _stream_response(body, request, ctx, started, input_text, candidates, providers):
+    """SSE 入口，含候选池故障转移（failover）。
+
+    故障转移语义与非流式一致：路由判定（首 token 前定死首选）不变，仅在首选不可用时
+    按顺序（priority 升序）切换候选。流式物理限制：一旦已向调用方下行任何内容，
+    便无法重来另一个模型，只能报错结束；因此 failover 只在首内容下行前
+    （通常是连接或首包失败）才发生，这也是模型不通最常见的失败点。
+
+    candidates 为空（显式指定 model 的场景）时，ordered 仅含首选，不发生切换。
+    """
     settings = get_settings()
-    headers = _router_headers(ctx)  # 首包前生效；流式下工具数在执行完才知道，故不进响应头
+    headers = _router_headers(ctx)
     adapter = get_adapter()
     base_payload = body.upstream_payload()
+    execute_tools = settings.enable_tool_execution
+
+    ordered = [ctx.final_model] + [c for c in candidates if ctx.final_model and c.id != ctx.final_model.id]
+    attempted = set()
+    _SSE_NL = bytes((10, 10))  # SSE 分隔符，用 bytes 构造避免转义歧义
 
     async def gen():
         from app.core.crypto import decrypt_api_key
 
+        usage_acc = {"prompt_tokens": 0, "completion_tokens": 0}
+        saw_usage = False
+        yielded_any = False
         status, reason = "success", ctx.fallback_reason
-        usage_acc: dict = {"prompt_tokens": 0, "completion_tokens": 0}
-        messages: list[dict] = list(base_payload.get("messages") or [])
+        last_reason = None
+        attempt = ctx.final_model
+        messages = list(base_payload.get("messages") or [])
         tools = base_payload.get("tools")
         executed = rounds = 0
-        saw_usage = False
-        execute_tools = settings.enable_tool_execution
+
         try:
-            try:
-                api_key = decrypt_api_key(provider.api_key_encrypted)
-            except ValueError:
-                status, reason = "error", "KEY_DECRYPT_FAILED"
-                yield b'data: {"error": {"message": "upstream key invalid", "code": 3002}}\n\n'
-                return
+            for attempt in ordered:
+                if attempt is None or attempt.id in attempted:
+                    continue
+                attempted.add(attempt.id)
+                provider = providers.get(attempt.provider_id)
+                if provider is None:
+                    continue
+                try:
+                    api_key = decrypt_api_key(provider.api_key_encrypted)
+                except ValueError:
+                    last_reason = f"KEY_DECRYPT_FAILED:{attempt.model_name}"
+                    logger.warning("stream: key decrypt failed, model=%s", attempt.model_name)
+                    continue
 
-            if not execute_tools:
-                # 纯透传：上游 SSE 字节原样下行。
-                # usage 只**读**一次供落库，读到的值不参与转发 ——
-                # 既不掐包、也不补发汇总包，转发内容与直连上游完全一致。
-                async for chunk in adapter.chat_stream(
-                    base_url=provider.base_url, api_key=api_key, model_name=model.model_name,
-                    payload=base_payload, timeout_ms=settings.request_timeout_ms,
-                    client=request.app.state.http_client,
-                ):
-                    if b'"usage"' in chunk:
-                        usage = _extract_stream_usage(chunk)
-                        if usage:
-                            for key in ("prompt_tokens", "completion_tokens"):
-                                usage_acc[key] = usage.get(key, 0) or 0
-                    yield chunk
-                return
-
-            for _attempt in range(MAX_TOOL_ROUNDS + 1):
-                round_payload = {**base_payload, "messages": messages}
-                if tools:
-                    round_payload["tools"] = tools
-                outcome: dict = {}
-                async for piece in _stream_round(
-                    adapter=adapter, provider=provider, api_key=api_key, model=model,
-                    payload=round_payload, request=request, outcome=outcome,
-                    detect_tools=execute_tools,
-                ):
-                    yield piece
-                usage = outcome.get("usage") or {}
-                for key in ("prompt_tokens", "completion_tokens"):
-                    usage_acc[key] += usage.get(key, 0) or 0
-                saw_usage = saw_usage or bool(outcome.get("had_usage"))
-
-                shadow = {"choices": [{"message": {
-                    "content": outcome.get("content"),
-                    "tool_calls": outcome.get("tool_calls") or None}}]}
-                calls, _kind = extract_tool_calls(shadow)
-                calls = filter_registered(calls) if execute_tools else []
-                if not calls:
-                    break
-                if rounds >= MAX_TOOL_ROUNDS or executed + len(calls) > MAX_TOOL_CALLS:
-                    # 超限时绝不静默吞内容：把整轮正文补发出去，并显式结束流
-                    logger.warning("stream tool loop limit reached rounds=%s executed=%s", rounds, executed)
-                    yield _rebuild_chunk(None, outcome.get("content") or "", finish_reason="stop")
-                    break
-
-                messages.append({
-                    "role": "assistant",
-                    "content": strip_tool_xml(outcome.get("content")) or "",
-                    "tool_calls": calls,
-                })
-                if not tools:
-                    tools = [_WEB_FETCH_TOOL]
-                results = []
-                for call in calls:
-                    fn = (call.get("function") or {}).get("name")
+                if not execute_tools:
                     try:
-                        out = await execute_tool_call(
-                            call, request.app.state.http_client, settings.request_timeout_ms)
-                        logger.info("stream tool ok trace=%s tool=%s arg=%s bytes=%s",
-                                    ctx.trace_id, fn,
-                                    (call.get("function") or {}).get("arguments", "")[:200], len(out))
-                        results.append(out)
-                    except ToolCallError as e:
-                        logger.info("stream tool fail trace=%s tool=%s err=%s", ctx.trace_id, fn, e)
-                        results.append(json.dumps({"error": str(e)}, ensure_ascii=False))
-                    except Exception as e:
-                        logger.exception("stream tool execute unexpected error")
-                        results.append(json.dumps({"error": f"{type(e).__name__}: {e}"},
-                                                  ensure_ascii=False))
-                append_tool_results(messages, calls, results)
-                executed += len(calls)
-                rounds += 1
+                        async for chunk in adapter.chat_stream(
+                            base_url=provider.base_url, api_key=api_key, model_name=attempt.model_name,
+                            payload=base_payload, timeout_ms=settings.request_timeout_ms,
+                            client=request.app.state.http_client,
+                        ):
+                            if b'"usage"' in chunk:
+                                usage = _extract_stream_usage(chunk)
+                                if usage:
+                                    for key in ("prompt_tokens", "completion_tokens"):
+                                        usage_acc[key] = usage.get(key, 0) or 0
+                            yielded_any = True
+                            yield chunk
+                        break
+                    except UpstreamError:
+                        last_reason = f"UPSTREAM_UNAVAILABLE:{attempt.model_name}"
+                        logger.warning("stream upstream failed (pass-through), model=%s, yielded=%s", attempt.model_name, yielded_any)
+                        if yielded_any:
+                            status, reason = "error", last_reason
+                            yield b'{"error": {"message": "upstream unavailable", "code": 3002}}' + _SSE_NL
+                            return
+                        continue
+                    except Exception:
+                        logger.exception("stream upstream unexpected error (pass-through)")
+                        last_reason = f"UPSTREAM_ERROR:{attempt.model_name}"
+                        if yielded_any:
+                            status, reason = "error", last_reason
+                            yield b'{"error": {"message": "upstream error", "code": 3002}}' + _SSE_NL
+                            return
+                        continue
 
-            ctx.tool_stats = {"rounds": rounds, "executed": executed}  # 供落库观测
-            if saw_usage:  # 调用方明确要了 usage：发累计值，与落库口径一致
+                try:
+                    for _att in range(MAX_TOOL_ROUNDS + 1):
+                        round_payload = {**base_payload, "messages": messages}
+                        if tools:
+                            round_payload["tools"] = tools
+                        outcome = {}
+                        async for piece in _stream_round(
+                            adapter=adapter, provider=provider, api_key=api_key, model=attempt,
+                            payload=round_payload, request=request, outcome=outcome,
+                            detect_tools=execute_tools,
+                        ):
+                            yielded_any = True
+                            yield piece
+                        usage = outcome.get("usage") or {}
+                        for key in ("prompt_tokens", "completion_tokens"):
+                            usage_acc[key] += usage.get(key, 0) or 0
+                        saw_usage = saw_usage or bool(outcome.get("had_usage"))
+
+                        shadow = {"choices": [{"message": {
+                            "content": outcome.get("content"),
+                            "tool_calls": outcome.get("tool_calls") or None}}]}
+                        calls, _kind = extract_tool_calls(shadow)
+                        calls = filter_registered(calls) if execute_tools else []
+                        if not calls:
+                            break
+                        if rounds >= MAX_TOOL_ROUNDS or executed + len(calls) > MAX_TOOL_CALLS:
+                            logger.warning("stream tool loop limit reached rounds=%s executed=%s", rounds, executed)
+                            yield _rebuild_chunk(None, outcome.get("content") or "", finish_reason="stop")
+                            break
+
+                        messages.append({
+                            "role": "assistant",
+                            "content": strip_tool_xml(outcome.get("content")) or "",
+                            "tool_calls": calls,
+                        })
+                        if not tools:
+                            tools = [_WEB_FETCH_TOOL]
+                        results = []
+                        for call in calls:
+                            fn = (call.get("function") or {}).get("name")
+                            try:
+                                out = await execute_tool_call(
+                                    call, request.app.state.http_client, settings.request_timeout_ms)
+                                logger.info("stream tool ok trace=%s tool=%s arg=%s bytes=%s",
+                                            ctx.trace_id, fn,
+                                            (call.get("function") or {}).get("arguments", "")[:200], len(out))
+                                results.append(out)
+                            except ToolCallError as e:
+                                logger.info("stream tool fail trace=%s tool=%s err=%s", ctx.trace_id, fn, e)
+                                results.append(json.dumps({"error": str(e)}, ensure_ascii=False))
+                            except Exception as e:
+                                logger.exception("stream tool execute unexpected error")
+                                results.append(json.dumps({"error": f"{type(e).__name__}: {e}"}, ensure_ascii=False))
+                        append_tool_results(messages, calls, results)
+                        executed += len(calls)
+                        rounds += 1
+                    break
+                except UpstreamError:
+                    last_reason = f"UPSTREAM_UNAVAILABLE:{attempt.model_name}"
+                    logger.warning("stream upstream failed, model=%s, yielded=%s", attempt.model_name, yielded_any)
+                    if yielded_any:
+                        status, reason = "error", last_reason
+                        yield b'{"error": {"message": "upstream unavailable", "code": 3002}}' + _SSE_NL
+                        return
+                    continue
+                except Exception:
+                    logger.exception("stream upstream unexpected error")
+                    last_reason = f"UPSTREAM_ERROR:{attempt.model_name}"
+                    if yielded_any:
+                        status, reason = "error", last_reason
+                        yield b'{"error": {"message": "upstream error", "code": 3002}}' + _SSE_NL
+                        return
+                    continue
+            else:
+                status, reason = "error", last_reason or "UPSTREAM_UNAVAILABLE"
+                yield b'{"error": {"message": "all candidates failed", "code": 3002}}' + _SSE_NL
+                return
+
+            ctx.tool_stats = {"rounds": rounds, "executed": executed}
+            if saw_usage:
                 usage_acc["total_tokens"] = usage_acc["prompt_tokens"] + usage_acc["completion_tokens"]
-                yield _usage_chunk(usage_acc, model.model_name)
-            yield b"data: [DONE]\n\n"
-        except UpstreamError:
-            status, reason = "error", f"UPSTREAM_UNAVAILABLE:{model.model_name}"
-            yield b'data: {"error": {"message": "upstream unavailable", "code": 3002}}\n\n'
+                yield _usage_chunk(usage_acc, attempt.model_name)
+            yield b"data: [DONE]" + _SSE_NL
         except Exception:
-            # 基线：内部静默降级，不透出 5xx 裸栈；但日志必须如实记失败
-            logger.exception("stream upstream unexpected error")
+            logger.exception("stream generator unexpected error")
             status, reason = "error", reason or "UPSTREAM_ERROR"
-            yield b'data: {"error": {"message": "upstream error", "code": 3002}}\n\n'
+            if not yielded_any:
+                yield b'{"error": {"message": "upstream error", "code": 3002}}' + _SSE_NL
         finally:
             pt = usage_acc.get("prompt_tokens", 0) or 0
             ct = usage_acc.get("completion_tokens", 0) or 0
-            # D-17：此前流式不记 token/cost，导致「用量与成本」页面漏掉全部流式请求
             logbuffer.enqueue(_log_entry(
-                ctx, input_text, model, status=status, reason=reason, started=started,
+                ctx, input_text, attempt, status=status, reason=reason, started=started,
                 prompt_tokens=pt, completion_tokens=ct,
-                cost=calc_cost(model.input_price, model.output_price, pt, ct)))
+                cost=calc_cost(attempt.input_price or 0, attempt.output_price or 0, pt, ct)))
 
     return StreamingResponse(gen(), media_type="text/event-stream", headers=headers)
 
