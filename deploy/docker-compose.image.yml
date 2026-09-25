@@ -64,6 +64,9 @@ services:
       timeout: 5s
       start_period: 25s
       retries: 3
+    # 发布后端端口到宿主机：/v1 对外网关与 /admin 控制台均可直连（默认 8000，可用 API_PORT 覆盖）
+    ports:
+      - "${API_PORT:-8000}:8000"
     networks: [llmbridge]
 
   web:
