@@ -1,0 +1,85 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 880" font-family="'Segoe UI','PingFang SC','Microsoft YaHei',system-ui,sans-serif">
+  <defs>
+    <marker id="arrowSolid" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#475569"/>
+    </marker>
+    <marker id="arrowAdmin" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#ea580c"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="900" height="880" fill="#ffffff"/>
+
+  <!-- Client -->
+  <rect x="350" y="30" width="160" height="48" rx="10" fill="#1f2937"/>
+  <text x="430" y="60" text-anchor="middle" fill="#ffffff" font-size="16" font-weight="700">Client</text>
+
+  <!-- arrows client to entries -->
+  <line x1="430" y1="78" x2="232" y2="108" stroke="#475569" stroke-width="2" marker-end="url(#arrowSolid)"/>
+  <line x1="430" y1="78" x2="628" y2="108" stroke="#475569" stroke-width="2" marker-end="url(#arrowSolid)"/>
+
+  <!-- /v1 entry -->
+  <rect x="40" y="110" width="380" height="78" rx="10" fill="#ecfeff" stroke="#0891b2" stroke-width="2"/>
+  <text x="60" y="140" fill="#0e7490" font-size="16" font-weight="700">/v1 · Public · OpenAI-compatible</text>
+  <text x="60" y="164" fill="#155e75" font-size="12.5">Auth → Rate-limit → Route → Forward → Stream</text>
+
+  <!-- /admin entry -->
+  <rect x="440" y="110" width="380" height="78" rx="10" fill="#fff7ed" stroke="#ea580c" stroke-width="2"/>
+  <text x="460" y="140" fill="#c2410c" font-size="16" font-weight="700">/admin · Internal · Console</text>
+  <text x="460" y="162" fill="#9a3412" font-size="12.5">Providers · Models · Rules · Logs ·</text>
+  <text x="460" y="180" fill="#9a3412" font-size="12.5">Playground · Eval · Usage</text>
+
+  <!-- admin dashed config connector -->
+  <path d="M630,188 L630,210 L850,210 L850,731 L820,731" fill="none" stroke="#ea580c" stroke-width="2" stroke-dasharray="6 5" marker-end="url(#arrowAdmin)"/>
+  <text x="700" y="203" fill="#ea580c" font-size="12" font-weight="600">Admin config</text>
+
+  <!-- Router Engine -->
+  <rect x="40" y="222" width="780" height="212" rx="12" fill="#f5f3ff" stroke="#7c3aed" stroke-width="2"/>
+  <rect x="40" y="222" width="780" height="34" rx="12" fill="#7c3aed"/>
+  <rect x="40" y="240" width="780" height="16" fill="#7c3aed"/>
+  <text x="430" y="245" text-anchor="middle" fill="#ffffff" font-size="15" font-weight="700">Router Engine (single instance)</text>
+
+  <rect x="60" y="262" width="740" height="40" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.5"/>
+  <text x="76" y="287" fill="#334155" font-size="13.5">L1 rule short-circuit (keyword / length / regex)</text>
+  <text x="724" y="287" text-anchor="end" fill="#16a34a" font-size="13" font-weight="600">hit</text>
+
+  <rect x="60" y="308" width="740" height="40" rx="8" fill="#faf5ff" stroke="#7c3aed" stroke-width="2"/>
+  <text x="76" y="333" fill="#6d28d9" font-size="13.5" font-weight="600">L2 decider Jev (confidence ≥ T2)</text>
+  <text x="724" y="333" text-anchor="end" fill="#7c3aed" font-size="13">→ task_type + candidate scoring</text>
+
+  <rect x="60" y="354" width="740" height="40" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.5"/>
+  <text x="76" y="379" fill="#334155" font-size="13.5">L3 fallback (confidence &lt; T2) → DEFAULT_MODEL_ID</text>
+
+  <text x="430" y="416" text-anchor="middle" fill="#6d28d9" font-size="12" font-style="italic">Single candidate pool: load_routable_models()</text>
+
+  <line x1="430" y1="434" x2="430" y2="452" stroke="#475569" stroke-width="2" marker-end="url(#arrowSolid)"/>
+
+  <!-- Adapter Pool -->
+  <rect x="40" y="454" width="780" height="64" rx="10" fill="#f0fdfa" stroke="#0d9488" stroke-width="2"/>
+  <text x="60" y="484" fill="#0f766e" font-size="14.5" font-weight="700">Adapter Pool (only place with protocol differences)</text>
+  <text x="60" y="508" fill="#115e59" font-size="12.5">OpenAICompatAdapter · non-streaming + SSE streaming</text>
+
+  <line x1="430" y1="518" x2="430" y2="554" stroke="#475569" stroke-width="2" marker-end="url(#arrowSolid)"/>
+
+  <!-- Model Pool -->
+  <rect x="40" y="556" width="780" height="70" rx="10" fill="#eff6ff" stroke="#2563eb" stroke-width="2"/>
+  <text x="60" y="586" fill="#1d4ed8" font-size="15" font-weight="700">Downstream model pool</text>
+  <text x="60" y="610" fill="#1e40af" font-size="12.5">13 vendors / 24 channels / 55 models · api · package · batch · coding_plan · token_plan</text>
+
+  <line x1="430" y1="626" x2="430" y2="666" stroke="#475569" stroke-width="2" marker-end="url(#arrowSolid)"/>
+
+  <!-- Data layer -->
+  <rect x="40" y="668" width="780" height="118" rx="10" fill="#f8fafc" stroke="#475569" stroke-width="2"/>
+  <text x="60" y="696" fill="#334155" font-size="15" font-weight="700">Data layer</text>
+  <rect x="60" y="710" width="345" height="42" rx="8" fill="#ccfbf1" stroke="#0d9488" stroke-width="1.5"/>
+  <text x="232" y="736" text-anchor="middle" fill="#0f766e" font-size="14" font-weight="700">PostgreSQL (primary)</text>
+  <rect x="415" y="710" width="345" height="42" rx="8" fill="#fef3c7" stroke="#d97706" stroke-width="1.5"/>
+  <text x="587" y="736" text-anchor="middle" fill="#b45309" font-size="13.5" font-weight="700">SQLite (zero-dep fallback)</text>
+  <text x="60" y="772" fill="#475569" font-size="12">request_log · provider · model · route_rule · sys_config</text>
+
+  <!-- legend -->
+  <line x1="60" y1="818" x2="110" y2="818" stroke="#475569" stroke-width="3" marker-end="url(#arrowSolid)"/>
+  <text x="120" y="823" fill="#334155" font-size="13">Request flow</text>
+  <line x1="330" y1="818" x2="380" y2="818" stroke="#ea580c" stroke-width="3" stroke-dasharray="6 5" marker-end="url(#arrowAdmin)"/>
+  <text x="390" y="823" fill="#334155" font-size="13">Admin config</text>
+</svg>
