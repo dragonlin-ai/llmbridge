@@ -28,6 +28,10 @@ export default {
     'logs.dialog.trace.modelNote': '（路由最终选中的模型；发生降级时为降级成功的那个）',
     'logs.dialog.trace.modelDeleted': '—（模型已删除，引用已解绑）',
     'logs.dialog.trace.snapshot': '决策快照（router_output_json）',
+    'logs.dialog.trace.snap.taskType': '任务类型',
+    'logs.dialog.trace.snap.confidence': '置信度',
+    'logs.dialog.trace.snap.decider': '判定器',
+    'logs.dialog.trace.snap.hitLayer': '命中层',
     'logs.dialog.trace.probDist': '概率分布',
   },
   en: {
@@ -59,6 +63,10 @@ export default {
     'logs.dialog.trace.modelNote': '(the model ultimately selected by routing; when a downgrade occurred, the successfully downgraded one)',
     'logs.dialog.trace.modelDeleted': '— (model deleted, reference unbound)',
     'logs.dialog.trace.snapshot': 'Decision snapshot (router_output_json)',
+    'logs.dialog.trace.snap.taskType': 'Task type',
+    'logs.dialog.trace.snap.confidence': 'Confidence',
+    'logs.dialog.trace.snap.decider': 'Decider',
+    'logs.dialog.trace.snap.hitLayer': 'Hit layer',
     'logs.dialog.trace.probDist': 'Probability distribution',
   },
 }

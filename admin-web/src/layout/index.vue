@@ -103,6 +103,10 @@
             </button>
             <template #dropdown>
               <el-dropdown-menu>
+                <el-dropdown-item command="change-password">
+                  <el-icon><Lock /></el-icon>
+                  <span>{{ t('layout.changePassword') }}</span>
+                </el-dropdown-item>
                 <el-dropdown-item command="logout">
                   <el-icon><SwitchButton /></el-icon>
                   <span>{{ t('layout.logout') }}</span>
@@ -110,6 +114,24 @@
               </el-dropdown-menu>
             </template>
           </el-dropdown>
+
+          <el-dialog v-model="pwdDlg" :title="t('layout.pwdTitle')" width="420px" append-to-body @closed="resetPwdForm">
+            <el-form label-position="top" @submit.prevent="onChangePassword">
+              <el-form-item :label="t('layout.pwdOld')">
+                <el-input v-model="pwdForm.old_password" type="password" show-password :placeholder="t('layout.pwdOldPlaceholder')" />
+              </el-form-item>
+              <el-form-item :label="t('layout.pwdNew')">
+                <el-input v-model="pwdForm.new_password" type="password" show-password :placeholder="t('layout.pwdNewPlaceholder')" />
+              </el-form-item>
+              <el-form-item :label="t('layout.pwdConfirm')">
+                <el-input v-model="pwdForm.confirm" type="password" show-password :placeholder="t('layout.pwdConfirmPlaceholder')" />
+              </el-form-item>
+            </el-form>
+            <template #footer>
+              <el-button @click="pwdDlg = false">{{ t('common.cancel') }}</el-button>
+              <el-button type="primary" :loading="pwdLoading" @click="onChangePassword">{{ t('common.confirm') }}</el-button>
+            </template>
+          </el-dialog>
         </div>
       </header>
 
@@ -127,7 +149,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onBeforeUnmount, ref, type Component } from 'vue'
+import { computed, onMounted, onBeforeUnmount, reactive, ref, type Component } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   ArrowDown,
@@ -140,6 +162,7 @@ import {
   Expand,
   Fold,
   Key,
+  Lock,
   MagicStick,
   Moon,
   Odometer,
@@ -151,6 +174,8 @@ import {
 } from '@element-plus/icons-vue'
 import { useTheme } from '../composables/useTheme'
 import { LANGS, locale, setLang, t, type Lang } from '../i18n'
+import { ElMessage } from 'element-plus'
+import { changePassword } from '../api'
 
 const route = useRoute()
 const router = useRouter()
@@ -220,9 +245,51 @@ function toggleCollapse() {
 }
 
 function onCommand(command: string) {
+  if (command === 'change-password') {
+    openChangePassword()
+    return
+  }
   if (command === 'logout') {
     localStorage.removeItem('token')
     router.push('/login')
+  }
+}
+
+// ---- 修改密码弹窗 ----
+const pwdDlg = ref(false)
+const pwdLoading = ref(false)
+const pwdForm = reactive({ old_password: '', new_password: '', confirm: '' })
+
+function openChangePassword() {
+  resetPwdForm()
+  pwdDlg.value = true
+}
+function resetPwdForm() {
+  pwdForm.old_password = ''
+  pwdForm.new_password = ''
+  pwdForm.confirm = ''
+}
+
+async function onChangePassword() {
+  if (!pwdForm.old_password || !pwdForm.new_password || !pwdForm.confirm) {
+    ElMessage.warning(t('login.requiredMsg'))
+    return
+  }
+  if (pwdForm.new_password.length < 6) {
+    ElMessage.warning(t('layout.pwdTooShort'))
+    return
+  }
+  if (pwdForm.new_password !== pwdForm.confirm) {
+    ElMessage.warning(t('layout.pwdMismatch'))
+    return
+  }
+  pwdLoading.value = true
+  try {
+    await changePassword(pwdForm.old_password, pwdForm.new_password)
+    ElMessage.success(t('layout.pwdChanged'))
+    pwdDlg.value = false
+  } finally {
+    pwdLoading.value = false
   }
 }
 

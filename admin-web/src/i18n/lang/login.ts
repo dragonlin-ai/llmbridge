@@ -7,7 +7,6 @@ export default {
     'login.password': '密码',
     'login.passwordPlaceholder': '请输入密码',
     'login.submit': '登 录',
-    'login.defaultAccount': '默认账号',
     'login.requiredMsg': '请输入用户名与密码',
   },
   en: {
@@ -18,7 +17,6 @@ export default {
     'login.password': 'Password',
     'login.passwordPlaceholder': 'Enter password',
     'login.submit': 'Sign in',
-    'login.defaultAccount': 'Default account',
     'login.requiredMsg': 'Please enter username and password',
   },
 }

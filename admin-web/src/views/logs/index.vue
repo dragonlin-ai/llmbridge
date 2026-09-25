@@ -108,10 +108,10 @@
       <template v-if="decisionSnap">
         <div class="sec">{{ t('logs.dialog.trace.snapshot') }}</div>
         <el-descriptions :column="2" border size="small">
-          <el-descriptions-item label="task_type">{{ decisionSnap.task_type ?? '—' }}</el-descriptions-item>
-          <el-descriptions-item label="confidence">{{ decisionSnap.confidence ?? '—' }}</el-descriptions-item>
-          <el-descriptions-item label="decider">{{ decisionSnap.decider ?? '—' }}</el-descriptions-item>
-          <el-descriptions-item label="hit_layer">{{ decisionSnap.hit_layer ?? '—' }}</el-descriptions-item>
+          <el-descriptions-item :label="t('logs.dialog.trace.snap.taskType')">{{ decisionSnap.task_type ?? '—' }}</el-descriptions-item>
+          <el-descriptions-item :label="t('logs.dialog.trace.snap.confidence')">{{ decisionSnap.confidence ?? '—' }}</el-descriptions-item>
+          <el-descriptions-item :label="t('logs.dialog.trace.snap.decider')">{{ decisionSnap.decider ?? '—' }}</el-descriptions-item>
+          <el-descriptions-item :label="t('logs.dialog.trace.snap.hitLayer')">{{ decisionSnap.hit_layer ?? '—' }}</el-descriptions-item>
         </el-descriptions>
         <div v-if="decisionSnap.probabilities" class="sec">{{ t('logs.dialog.trace.probDist') }}</div>
         <ProbChart v-if="decisionSnap.probabilities" :probabilities="decisionSnap.probabilities as Record<string, number>" />

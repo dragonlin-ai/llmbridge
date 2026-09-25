@@ -5,6 +5,10 @@ import type { ApiKeyItem, DeciderSettings, DeciderTestResult, EvalReport, LogIte
 export const login = (username: string, password: string) =>
   request.post<never, { access_token: string; role: string }>('/admin/auth/login', { username, password })
 
+/** 登录后修改自己的密码。 */
+export const changePassword = (old_password: string, new_password: string) =>
+  request.post<never, null>('/admin/auth/change-password', { old_password, new_password })
+
 // ---- providers ----
 export const listProviders = (params?: Record<string, unknown>) =>
   request.get<never, PageResult<Provider>>('/admin/providers', { params })

@@ -53,8 +53,6 @@
           {{ t('login.submit') }}
         </el-button>
       </form>
-
-      <p class="login-hint">{{ t('login.defaultAccount') }} <code class="app-code">admin</code> / <code class="app-code">admin123</code></p>
     </div>
   </div>
 </template>
@@ -192,12 +190,5 @@ html.dark .login-orb-b {
   font-size: 15px;
   font-weight: 600;
   letter-spacing: 0.08em;
-}
-
-.login-hint {
-  margin-top: 20px;
-  text-align: center;
-  font-size: 12px;
-  color: var(--text-3);
 }
 </style>
