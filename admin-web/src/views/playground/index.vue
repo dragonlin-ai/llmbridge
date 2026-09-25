@@ -52,9 +52,7 @@
           <el-descriptions-item :label="t('playground.desc.confidence')">{{ result.confidence ?? '—' }}</el-descriptions-item>
           <el-descriptions-item :label="t('playground.desc.decider')">
             <span class="app-badge" :class="deciderTone">{{ deciderName }}</span>
-            <span class="decider-hint" v-if="showDeciderWarn">
-              {{ result.decider_error ?? result.fallback_reason ?? t('playground.desc.deciderNoOutput') }}
-            </span>
+            <span class="decider-hint" v-if="deciderHint">{{ deciderHint }}</span>
           </el-descriptions-item>
           <el-descriptions-item :label="t('playground.desc.selectedModel')" :span="2">
             {{ result.selected_model?.display_name }}（{{ result.selected_model?.model_name }}）
@@ -238,6 +236,28 @@ const showDeciderWarn = computed(() => {
   const r = result.value
   if (!r) return false
   return r.hit_layer !== 'L1' && !r.decider
+})
+
+/**
+ * 配置值 ≠ 生效值：选了 jev 但判定器实际是 mock（缺 JEV_API_KEY，或 JEV API 对大陆不可达）。
+ * 试跑台必须把这点讲清，否则「我明明选了 JEV 怎么还是 Mock」无从解释 —— 这是设置页
+ * 已有 mismatch 提示的镜像，用户在试跑台看到 mock 时同样需要这层解释。
+ */
+const deciderMismatch = computed(() => {
+  const r = result.value
+  if (!r) return false
+  return r.judge_provider === 'jev' && r.active_decider !== 'jev'
+})
+
+/** 判定器行的最终提示文案：mismatch 优先（配置≠生效），其次才是「判定器没出结果」。 */
+const deciderHint = computed(() => {
+  const r = result.value
+  if (!r) return ''
+  if (deciderMismatch.value) return t('playground.desc.deciderMismatch')
+  if (showDeciderWarn.value) {
+    return r.decider_error ?? r.fallback_reason ?? t('playground.desc.deciderNoOutput')
+  }
+  return ''
 })
 
 /**
